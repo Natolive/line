@@ -9,8 +9,8 @@ export const GUARDRAIL_X = CARRIAGEWAY_HALF + 2.5; // hard shoulder, then the ra
 export const SHOULDER = {
   x: (CARRIAGEWAY_HALF + GUARDRAIL_X) / 2, // m, where broken-down cars stand (either side)
   drag: 3, // m/s² of extra deceleration with the car's centre past the edge line
-  breakdownGap: 400, // m on average between broken-down cars, randomised ±50%
-  breakdownRight: 0.75, // share on the right shoulder
+  breakdownGap: [1200, 400] as [left: number, right: number], // m on average between broken-down cars per side, randomised ±50%
+  queueGap: [20, 45] as [min: number, max: number], // m between them while someone drives on that shoulder: no gap to weave through
 };
 
 export const SUSPENSION = {

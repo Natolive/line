@@ -14,7 +14,11 @@ import { Suspension } from './suspension.ts';
 
 const kmh = (k: number) => k / 3.6;
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-const nextGap = () => SHOULDER.breakdownGap * (0.5 + Math.random());
+/** Meters to the next broken-down car on shoulder `side` (0 left, 1 right); a queue if someone is riding it. */
+const nextGap = (side: number, ridden = false) => {
+  const [lo, hi] = SHOULDER.queueGap;
+  return ridden ? lo + Math.random() * (hi - lo) : SHOULDER.breakdownGap[side] * (0.5 + Math.random());
+};
 
 type Car = {
   id: number;
@@ -49,7 +53,7 @@ export class Traffic {
   private cars: Car[] = [];
   private clock = 0;
   private nextId = 1;
-  private nextBreakdown = 0; // road position of the next broken-down car
+  private nextBreakdown = [0, 0]; // road position of the next broken-down car, left and right shoulder
   private viewD = 0; // road position of the local player: everything is drawn relative to it
 
   constructor(scene: THREE.Scene, fleet: Fleet) {
@@ -64,7 +68,7 @@ export class Traffic {
     for (const c of this.cars) this.scene.remove(c.v.mesh);
     this.cars = [];
     if (this.remote) return;
-    this.nextBreakdown = me.d + 150 + nextGap();
+    this.nextBreakdown = [0, 1].map((side) => me.d + 150 + nextGap(side));
     for (let d = me.d + 70; d < me.d - T.spawnAhead; d += 22 + Math.random() * 25) this.trySpawn(d, [me]);
   }
 
@@ -109,11 +113,13 @@ export class Traffic {
       return false;
     });
     const horizon = front - T.spawnAhead;
-    if (this.nextBreakdown < front) this.nextBreakdown = horizon; // e.g. just took over as host
-    if (this.nextBreakdown < horizon) {
-      const side = Math.random() < SHOULDER.breakdownRight ? 1 : -1;
-      this.add(pick(this.models.slice(0, this.heavyFrom).map((_, i) => i)), this.nextBreakdown, side * SHOULDER.x, 0, false);
-      this.nextBreakdown += nextGap();
+    for (const side of [0, 1]) {
+      const sign = side ? 1 : -1, ridden = drivers.some((p) => onShoulder(p.x) && Math.sign(p.x) === sign);
+      if (this.nextBreakdown[side] < front) this.nextBreakdown[side] = horizon; // e.g. just took over as host
+      if (ridden) this.nextBreakdown[side] = Math.min(this.nextBreakdown[side], horizon); // start the queue now
+      if (this.nextBreakdown[side] >= horizon) continue;
+      this.add(Math.floor(Math.random() * this.heavyFrom), this.nextBreakdown[side], sign * SHOULDER.x, 0, false);
+      this.nextBreakdown[side] += nextGap(side, ridden);
     }
     const wanted = Math.min(70, densityAt(km) * (1 + (front - back) / 500));
     if (this.cars.filter((c) => !parked(c)).length < wanted) {
