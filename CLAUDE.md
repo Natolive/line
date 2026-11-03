@@ -60,7 +60,7 @@ The server ticks at 30 Hz and sends one snapshot of all cars per room per tick; 
 
 Every car and traffic report carries the server-clock time its sender simulated it (clamped by the server); never time samples by arrival.
 
-Remote cars and mirrored traffic are drawn at least `INTERP_DELAY` (100 ms) in the past via `net/interp.ts`, more if reports arrive later (`adaptDelay` jitter buffer); contact checks use their estimated current position (`Rival.now`), never the drawn one.
+Remote cars and mirrored traffic are drawn where they are now, predicted from their newest report (dead reckoning in `net/interp.ts`); a report that disagrees becomes a correction that fades out (`addReport`/`present`), never a snap. Contacts use the drawn position: what you see is what you hit.
 
 Times on the wire are server time (ms); convert with `Battle.serverNow()` (ping/pong clock sync).
 

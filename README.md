@@ -42,7 +42,7 @@ The last driver on the road wins; everyone sees the final ranking, then `Space` 
 
 To try it alone, open the game in two browser windows and join the same room code.
 
-Netcode: binary messages (17 bytes per car), a 30 Hz server tick sending one snapshot per room, 100 ms interpolation of other cars, and ping/pong clock sync; your ping shows in the race HUD.
+Netcode: binary messages (19 bytes per car, stamped with when the sender simulated it), a 30 Hz server tick sending one snapshot per room, other cars predicted to the present with smoothed corrections (as racing games do), and ping/pong clock sync; ping and prediction quality show in the race HUD.
 
 ## Garage
 

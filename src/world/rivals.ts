@@ -1,7 +1,7 @@
 // Other players' cars: their real models, steered toward what their games report, with a name above them.
 import * as THREE from 'three';
 import { GARAGE } from '../data/cars/index.ts';
-import { pushSample, sampleAt, type Sample } from '../net/interp.ts';
+import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { CarState, PlayerInfo } from '../net/protocol.ts';
 import type { Rect } from '../rules/collision.ts';
 import type { Fleet } from './vehicles/fleet.ts';
@@ -11,14 +11,13 @@ import { spawn, spinWheels, type Vehicle } from './vehicles/prefab.ts';
 export type Rival = {
   info: PlayerInfo;
   v: Vehicle;
-  d: number; // drawn position: a little in the past, smooth
+  d: number; // where it is now, as drawn and as collided with: predicted, corrections faded in (net/interp.ts)
   x: number;
   heading: number;
   speed: number;
-  now: { d: number; x: number }; // best guess of where it really is now: used for contact
   score: number;
   alive: boolean;
-  samples: Sample[];
+  track: Track;
 };
 
 /** A name tag that always faces the camera. */
@@ -63,7 +62,7 @@ export class Rivals {
     v.mesh.add(tag);
     setBrakeLights(v, false);
     this.scene.add(v.mesh);
-    this.all.set(info.id, { info, v, d, x, heading: 0, speed: 0, now: { d, x }, score: 0, alive: true, samples: [] });
+    this.all.set(info.id, { info, v, d, x, heading: 0, speed: 0, score: 0, alive: true, track: track() });
   }
 
   remove(id: string) {
@@ -76,13 +75,13 @@ export class Rivals {
     for (const id of [...this.all.keys()]) this.remove(id);
   }
 
-  /** A report from the server's snapshot taken at server time `t` (ms). */
-  setState(id: string, s: CarState, t: number) {
+  /** A report of the car as its game simulated it at server time `t` (ms), arriving at `now`. Returns how far it moved the prediction (m). */
+  setState(id: string, s: CarState, t: number, now: number) {
     const r = this.all.get(id);
-    if (!r) return;
-    pushSample(r.samples, { t, d: s.d, x: s.x, heading: s.heading, speed: s.speed, steer: s.steer });
+    if (!r?.alive) return 0;
     r.score = s.score;
     setBrakeLights(r.v, s.brake);
+    return addReport(r.track, { t, d: s.d, x: s.x, heading: s.heading, speed: s.speed, steer: s.steer }, now);
   }
 
   /** Eliminated: the car stays where it stopped, as a wreck. */
@@ -94,34 +93,29 @@ export class Rivals {
     }
   }
 
-  /**
-   * Draws each rival as it was at server time `renderT` (between two real reports: smooth), and estimates
-   * where it is at `nowT` for contact checks. Placed relative to `myD`. Returns how many had no report in hand.
-   */
-  update(dt: number, myD: number, renderT: number, nowT: number) {
-    let gaps = 0; // rivals drawn past their newest report (extrapolated, a snap will follow)
+  /** Moves each rival to where it is at server time `now` (predicted, see net/interp.ts), placed relative to `myD`. */
+  update(dt: number, myD: number, now: number) {
     for (const r of this.all.values()) {
-      const s = r.alive ? sampleAt(r.samples, renderT) : null;
-      if (s && renderT > r.samples[r.samples.length - 1].t) gaps++;
+      const s = r.alive ? present(r.track, now, dt) : null;
       if (s) {
         Object.assign(r, { d: s.d, x: s.x, heading: s.heading, speed: s.speed });
-        const n = sampleAt(r.samples, nowT)!;
-        r.now = { d: n.d, x: n.x };
         for (const p of r.v.steerPivots) p.rotation.y = -s.steer;
         spinWheels(r.v, r.speed * dt);
       }
       r.v.mesh.position.set(r.x, 0, myD - r.d);
       r.v.mesh.rotation.y = -r.heading;
     }
-    return gaps;
   }
 
-  /** Rivals still racing, where they are now (not where they're drawn): for traffic and collisions. */
+  /**
+   * Rivals still racing, exactly where they're drawn: for traffic and collisions. What you see is what you hit;
+   * both games predict each other to the present, so they agree on a contact to within the prediction error.
+   */
   drivers() {
-    return [...this.all.values()].filter((r) => r.alive).map((r) => ({ id: r.info.id, d: r.now.d, x: r.now.x, speed: r.speed, rect: this.rect(r) }));
+    return [...this.all.values()].filter((r) => r.alive).map((r) => ({ id: r.info.id, d: r.d, x: r.x, speed: r.speed, rect: this.rect(r) }));
   }
 
   private rect(r: Rival): Rect {
-    return { x: r.now.x, z: 0, w: r.v.w, l: r.v.l, heading: r.heading };
+    return { x: r.x, z: 0, w: r.v.w, l: r.v.l, heading: r.heading };
   }
 }

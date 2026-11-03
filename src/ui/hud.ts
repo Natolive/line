@@ -3,7 +3,7 @@ import type { Car } from '../data/cars/index.ts';
 import type { PlayerInfo } from '../net/protocol.ts';
 
 export type Screen = 'menu' | 'play' | 'pause' | 'over' | 'mp' | 'lobby' | 'countdown' | 'out' | 'results';
-export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; delay: number; gaps: number }; // wall: meters ahead of the storm
+export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; ahead: number; fix: number }; // ahead: ms rivals are predicted past their reports; fix: m each report corrects // wall: meters ahead of the storm
 
 export type Stats = { score: number; kmh: number; gear: number; rev: number; km: number; mult: number }; // rev: 0..1 of redline
 export type Result = { score: number; best: number; isNew: boolean; km: number; nearMisses: number; seconds: number };
@@ -95,8 +95,8 @@ export class Hud {
     ping.textContent = s.ping ? `${Math.round(s.ping)} ms` : '—';
     ping.dataset.level = s.ping < 80 ? 'good' : s.ping < 150 ? 'ok' : 'bad';
     const net = $('b-net');
-    net.textContent = `${Math.round(s.delay)} ms · ${s.gaps.toFixed(1)} gaps/s`;
-    net.dataset.level = s.gaps < 0.5 ? 'good' : s.gaps < 3 ? 'ok' : 'bad';
+    net.textContent = s.ahead ? `${Math.round(s.ahead)} ms · ${Math.round(s.fix * 100)} cm` : '—';
+    net.dataset.level = s.fix < 0.1 ? 'good' : s.fix < 0.5 ? 'ok' : 'bad';
     const danger = Math.min(1, Math.max(0, 1 - s.wall / 250)); // storm closer than 250 m: screen edges turn red
     $('b-wall-bar').style.width = `${(1 - danger) * 100}%`;
     vignette.style.opacity = String(danger * 0.85);

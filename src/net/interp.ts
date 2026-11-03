@@ -1,26 +1,22 @@
-// Snapshot interpolation: remote cars are drawn a little in the past, between two real reports,
-// so late packets never make them stutter. Pure, so it is unit-testable.
+// Remote cars, the way racing games draw them: where they are NOW, predicted from their newest report
+// (dead reckoning), and when a report proves the guess wrong, the gap fades out over a few frames
+// instead of snapping. Cars have so much inertia that a 100 ms guess is rarely off by more than a few cm.
+// Pure, so it is unit-testable.
 
 export type Sample = { t: number; d: number; x: number; heading: number; speed: number; steer: number };
 
-/** How far in the past remote cars are drawn (ms), at least: ~3 server ticks of margin against jitter. */
-export const INTERP_DELAY = 100;
-const MAX_DELAY = 300; // ms: past this, a laggy player is extrapolated rather than delaying everyone more
-const DELAY_MARGIN = 20; // ms kept above the latest report seen recently
-const PEAK_DECAY = 20; // ms per second: how fast the worst recent lateness is forgotten
-const WARP = 0.1; // the render clock runs at most 10% fast or slow while the delay adapts: unnoticeable
+/** A remote car: its recent reports, and the correction still being faded out (drawn = predicted + err). */
+export type Track = { samples: Sample[]; err: { d: number; x: number; heading: number } };
 
-/**
- * Jitter buffer: `peak` is the worst lateness (render clock − report time) seen recently, decaying slowly;
- * the delay eases toward it plus a margin, so reports are almost always in hand before they're drawn
- * (interpolation), yet a good connection keeps the delay low.
- */
-export function adaptDelay(delay: number, peak: number, dt: number) {
-  const want = Math.min(MAX_DELAY, Math.max(INTERP_DELAY, peak + DELAY_MARGIN)), step = dt * 1000 * WARP;
-  return { delay: delay + Math.max(-step, Math.min(step, want - delay)), peak: Math.max(0, peak - dt * PEAK_DECAY) };
-}
-const MAX_EXTRAPOLATE = 250; // ms: past the newest report, keep driving straight for at most this long
+const MAX_PREDICT = 1000; // ms: past the newest report, keep predicting at most this long, then hold (silent player)
+const TREND = 0.25; // s: acceleration and yaw rate are trusted this far ahead; past that, straight on at constant speed
+const RATE_WINDOW = 100; // ms of recent reports used for acceleration and yaw rate (short: reacts fast)
 const PACE_WINDOW = 300; // ms of recent reports used to measure how fast a car really advances
+const MAX_YAW_RATE = 1; // rad/s: a car on a motorway never turns faster; guards against a glitched report
+const FADE = 0.1; // s: time constant of the correction fade (~95% gone in 0.3 s)
+const SNAP = 5; // m: a correction bigger than this is a teleport (crash, respawn): jump, don't slide
+
+export const track = (): Track => ({ samples: [], err: { d: 0, x: 0, heading: 0 } });
 
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
 
@@ -39,17 +35,33 @@ function slope(samples: Sample[], i: number, key: 'd' | 'x') {
   return (n[key] - p[key]) / Math.max(1, n.t - p.t);
 }
 
-/** State at time `t` from samples sorted by time: interpolated between neighbours, or extrapolated a little. */
+/** The oldest report within `window` ms of the newest (the newest itself if it's alone). */
+const since = (samples: Sample[], window: number) => samples.find((s) => s.t >= samples[samples.length - 1].t - window)!;
+
+/**
+ * State at time `t`: between two reports, a smooth curve through them; past the newest, a prediction
+ * from it with the car's measured acceleration and yaw rate (x moves as speed × sin(heading), as in
+ * rules/vehicle.ts).
+ */
 export function sampleAt(samples: Sample[], t: number): Sample | null {
   if (!samples.length) return null;
   const last = samples[samples.length - 1];
   if (t >= last.t) {
-    // extrapolate at the pace the reports actually advance, not the reported speed: a game below 20 fps
-    // clamps its dt, so its car covers less road than its speedometer says, and each report would snap it back
-    const from = samples.find((s) => s.t >= last.t - PACE_WINDOW)!;
-    const pace = from === last ? last.speed : ((last.d - from.d) * 1000) / (last.t - from.t);
-    const ahead = Math.min(t - last.t, MAX_EXTRAPOLATE) / 1000;
-    return { ...last, t, d: last.d + pace * ahead };
+    const from = since(samples, PACE_WINDOW), r = since(samples, RATE_WINDOW);
+    // a game below 20 fps clamps its dt: its car covers less road than its speedometer says. Scale by that.
+    // (compared with the average reported speed over the same reports, so braking or accelerating doesn't skew it)
+    const pace = from === last ? 0 : ((last.d - from.d) * 1000) / (last.t - from.t), dial = (from.speed + last.speed) / 2;
+    const scale = from !== last && dial > 1 ? Math.max(0, Math.min(1.2, pace / dial)) : 1;
+    const span = (last.t - r.t) / 1000;
+    const accel = span > 0 ? (last.speed - r.speed) / span : 0;
+    const yawRate = span > 0 ? Math.max(-MAX_YAW_RATE, Math.min(MAX_YAW_RATE, (last.heading - r.heading) / span)) : 0;
+    const tau = Math.min(t - last.t, MAX_PREDICT) / 1000, v = last.speed, h = last.heading;
+    // the trend (braking, turning) holds for TREND at most, and braking stops at 0 rather than reversing
+    const ta = Math.min(tau, TREND, accel < 0 ? v / -accel : Infinity), speed = v + accel * ta, heading = h + yawRate * ta;
+    const travel = v * ta + 0.5 * accel * ta * ta + speed * (tau - ta);
+    // lateral: integral of v·sin(h + ω·τ), to second order, then straight on
+    const lateral = v * (Math.sin(h) * ta + 0.5 * Math.cos(h) * yawRate * ta * ta) + speed * Math.sin(heading) * (tau - ta);
+    return { ...last, t, d: last.d + travel * scale, x: last.x + lateral * scale, heading, speed };
   }
   for (let i = samples.length - 1; i > 0; i--) {
     const a = samples[i - 1], b = samples[i];
@@ -62,9 +74,36 @@ export function sampleAt(samples: Sample[], t: number): Sample | null {
   return { ...samples[0], t };
 }
 
-/** Adds a sample in time order and forgets ones older than one second before it. */
+/** Adds a sample in time order and forgets ones older than one second before it. False if it was dropped. */
 export function pushSample(samples: Sample[], s: Sample) {
-  if (samples.length && s.t <= samples[samples.length - 1].t) return; // duplicate or out of order
+  if (samples.length && s.t <= samples[samples.length - 1].t) return false; // duplicate or out of order
   samples.push(s);
   while (samples.length > 2 && samples[1].t < s.t - 1000) samples.shift();
+  return true;
+}
+
+/**
+ * A report arrives at time `now`: the prediction jumps to account for it, and that jump becomes a
+ * correction that fades out (see `present`), so the drawn car never teleports. Returns the jump (m).
+ */
+export function addReport(tr: Track, s: Sample, now: number) {
+  const before = sampleAt(tr.samples, now);
+  if (!pushSample(tr.samples, s) || !before) return 0;
+  const after = sampleAt(tr.samples, now)!, dd = before.d - after.d, dx = before.x - after.x;
+  tr.err.d += dd;
+  tr.err.x += dx;
+  tr.err.heading += before.heading - after.heading;
+  if (Math.hypot(tr.err.d, tr.err.x) > SNAP) tr.err = { d: 0, x: 0, heading: 0 };
+  return Math.hypot(dd, dx);
+}
+
+/** Where to draw the car at `now`: its predicted state plus what's left of the last corrections. */
+export function present(tr: Track, now: number, dt: number): Sample | null {
+  const p = sampleAt(tr.samples, now);
+  if (!p) return null;
+  const k = Math.exp(-dt / FADE), e = tr.err;
+  e.d *= k;
+  e.x *= k;
+  e.heading *= k;
+  return { ...p, d: p.d + e.d, x: p.x + e.x, heading: p.heading + e.heading };
 }

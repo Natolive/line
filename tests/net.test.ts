@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeSnapshot, decodeState, decodeTraffic, encodeState, encodeTraffic, packSnapshot, stampTraffic, stateTime, trafficTime } from '../src/net/codec.ts';
-import { adaptDelay, INTERP_DELAY, pushSample, sampleAt, type Sample } from '../src/net/interp.ts';
+import { addReport, present, pushSample, sampleAt, track, type Sample } from '../src/net/interp.ts';
 import type { CarState, TrafficCar } from '../src/net/protocol.ts';
 
 const car: CarState = { d: 12345.678, x: -3.61, heading: 0.1234, speed: 83.27, steer: -0.21, brake: true, score: 987654 };
@@ -37,7 +37,7 @@ test('traffic round trip keeps flags, and the server can stamp its time', () => 
   assert.deepEqual({ ...back, d: Math.round(back.d * 10) / 10, yaw: Math.round(back.yaw * 100) / 100 }, { ...cars[0], d: 500.5 });
 });
 
-test('interpolation draws between reports and extrapolates only a little', () => {
+test('between reports the car follows them; past the newest it is predicted, but not forever', () => {
   const s: Sample[] = [];
   pushSample(s, { t: 0, d: 0, x: 0, heading: 0, speed: 20, steer: 0 });
   pushSample(s, { t: 100, d: 2, x: 1, heading: 0, speed: 20, steer: 0 });
@@ -45,10 +45,10 @@ test('interpolation draws between reports and extrapolates only a little', () =>
   close(sampleAt(s, 50)!.d, 1, 1e-9);
   close(sampleAt(s, 50)!.x, 0.5, 1e-9);
   close(sampleAt(s, 200)!.d, 4, 1e-9); // 100 ms past the last report at 20 m/s
-  close(sampleAt(s, 10_000)!.d, 2 + 20 * 0.25, 1e-9); // a silent player stops moving after 250 ms
+  close(sampleAt(s, 10_000)!.d, 2 + 20 * 1, 1e-9); // a silent player stops moving after 1 s
 });
 
-test('extrapolation follows how far reports really advance, not the reported speed (laggy sender)', () => {
+test('prediction follows how far reports really advance, not the reported speed (laggy sender)', () => {
   const s: Sample[] = [];
   for (let t = 0; t <= 200; t += 66) pushSample(s, { t, d: t * 0.015, x: 0, heading: 0, speed: 20, steer: 0 }); // 15 m/s on the road, 20 on the dial
   const last = s[s.length - 1];
@@ -65,16 +65,6 @@ test('a report is timed when its sender simulated it, but the server never trust
   assert.equal(trafficTime(encodeTraffic([], 0), 1000), 1000);
 });
 
-test('the render delay grows with the lateness of reports, gently, and comes back down when the link calms', () => {
-  let st = { delay: INTERP_DELAY, peak: 180 };
-  st = adaptDelay(st.delay, st.peak, 1 / 60);
-  close(st.delay, INTERP_DELAY + 1000 / 60 * 0.1, 1e-9); // 10% time warp at most: no visible jump
-  for (let i = 0; i < 60 * 10; i++) st = adaptDelay(st.delay, Math.max(st.peak, 180), 1 / 60);
-  close(st.delay, 200, 1e-6); // worst lateness + margin
-  for (let i = 0; i < 60 * 30; i++) st = adaptDelay(st.delay, st.peak, 1 / 60);
-  assert.equal(st.delay, INTERP_DELAY, 'never below the floor');
-});
-
 test('interpolation curves through reports without a kink, and stays exact on steady motion', () => {
   const steady: Sample[] = [];
   for (let t = 0; t <= 99; t += 33) pushSample(steady, { t, d: t * 0.03, x: 0, heading: 0, speed: 30, steer: 0 });
@@ -84,4 +74,69 @@ test('interpolation curves through reports without a kink, and stays exact on st
   for (let t = 0; t <= 132; t += 33) pushSample(acc, { t, d: (t / 100) ** 2 * 10, x: 0, heading: 0, speed: 0, steer: 0 });
   const rate = (t: number) => (sampleAt(acc, t + 0.01)!.d - sampleAt(acc, t - 0.01)!.d) / 0.02;
   close(rate(66 - 0.05), rate(66 + 0.05), 0.0005); // a straight-line lerp jumps by ~0.006 here
+});
+
+/** Reports of a car with constant acceleration `a` (m/s²) and yaw rate `w` (rad/s), every 33 ms up to `until`. */
+function drive(a: number, w: number, until: number, v0 = 30, h0 = 0) {
+  const out: Sample[] = [];
+  let d = 0, x = 0, v = v0, h = h0;
+  for (let t = 0; t <= until; t += 1) { // 1 ms steps: the "truth"
+    if (t % 33 === 0) out.push({ t, d, x, heading: h, speed: v, steer: 0 });
+    d += v / 1000; x += v * Math.sin(h) / 1000; v = Math.max(0, v + a / 1000); h += w / 1000;
+  }
+  return out;
+}
+const truthAt = (a: number, w: number, t: number) => drive(a, w, t + 1).find((s) => s.t === t)!;
+
+test('prediction 100 ms ahead lands within a few cm of the real car: braking, accelerating, changing lanes', () => {
+  for (const [a, w] of [[0, 0], [-9, 0], [4, 0], [0, 0.3], [-6, -0.3]]) {
+    const s: Sample[] = [];
+    for (const r of drive(a, w, 198)) pushSample(s, r);
+    const p = sampleAt(s, 198 + 99)!, real = truthAt(a, w, 297);
+    close(p.d, real.d, 0.03);
+    close(p.x, real.x, 0.03);
+    close(p.speed, real.speed, 0.05);
+  }
+});
+
+test('a braking car is predicted to stop, never to reverse', () => {
+  const s: Sample[] = [];
+  for (const r of drive(-9, 0, 99, 1)) pushSample(s, r); // 1 m/s, braking hard
+  const stop = sampleAt(s, 99 + 200)!;
+  assert.equal(stop.speed, 0);
+  assert.equal(sampleAt(s, 99 + 900)!.d, stop.d);
+  assert.ok(stop.d <= s[s.length - 1].d + (1 * 1) / (2 * 9) + 1e-9);
+});
+
+test('braking and steering are extrapolated a quarter second, then the car goes straight on: no runaway guess', () => {
+  const s: Sample[] = [];
+  for (const r of drive(-6, 0.3, 99)) pushSample(s, r);
+  const a = sampleAt(s, 99 + 250)!, b = sampleAt(s, 99 + 900)!;
+  close(b.speed, a.speed, 1e-9);
+  close(b.heading, a.heading, 1e-9);
+  close(b.d - a.d, a.speed * 0.65, 0.01);
+});
+
+test('a report that disagrees never makes the car jump: the correction fades out', () => {
+  const tr = track(), dt = 1 / 60;
+  addReport(tr, { t: 0, d: 0, x: 0, heading: 0, speed: 30, steer: 0 }, 0);
+  addReport(tr, { t: 33, d: 0.99, x: 0, heading: 0, speed: 30, steer: 0 }, 33);
+  let now = 80;
+  const before = present(tr, now, 0)!;
+  // a report that is 0.5 m behind what we predicted (the driver braked)
+  const jump = addReport(tr, { t: 66, d: 1.48, x: 0.2, heading: 0, speed: 29, steer: 0 }, now);
+  assert.ok(jump > 0.4, `the correction is measured (${jump})`);
+  const after = present(tr, now, 0)!;
+  close(after.d, before.d, 1e-9); // same frame: drawn exactly where it was
+  close(after.x, before.x, 1e-9);
+  for (let i = 0; i < 18; i++) present(tr, (now += 1000 * dt), dt); // 0.3 s
+  assert.ok(Math.hypot(tr.err.d, tr.err.x) < 0.05 * jump, 'mostly gone in 0.3 s');
+});
+
+test('a teleport (crash, respawn) snaps instead of sliding across the road', () => {
+  const tr = track();
+  addReport(tr, { t: 0, d: 0, x: 0, heading: 0, speed: 30, steer: 0 }, 0);
+  addReport(tr, { t: 33, d: 1, x: 0, heading: 0, speed: 30, steer: 0 }, 40);
+  addReport(tr, { t: 66, d: 1, x: 7, heading: 0, speed: 0, steer: 0 }, 70);
+  assert.deepEqual(tr.err, { d: 0, x: 0, heading: 0 });
 });

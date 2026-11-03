@@ -1,6 +1,6 @@
 // Binary encoding for the frequent messages. Each report carries the time its sender simulated it:
 // timing samples by arrival would bake the network jitter into the motion.
-// (cars 30×/s, traffic 15×/s). JSON stays for rare control messages.
+// Cars and traffic go 30×/s; JSON stays for rare control messages.
 // Values are quantised to what the game can show: x to the centimetre, speed to the cm/s, angles to 0.1 mrad.
 import type { CarState, TrafficCar } from './protocol.ts';
 

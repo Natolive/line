@@ -3,7 +3,7 @@
 // one game simulates it ('local': solo, or the room host) and the others mirror it ('remote').
 import type * as THREE from 'three';
 import { LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, TRAFFIC as T } from '../core/config.ts';
-import { pushSample, sampleAt, type Sample } from '../net/interp.ts';
+import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { TrafficCar } from '../net/protocol.ts';
 import { rectsOverlap, type Rect } from '../rules/collision.ts';
 import { densityAt } from '../rules/difficulty.ts';
@@ -30,7 +30,7 @@ type Car = {
   braking: boolean;
   passed: boolean; // near miss already judged against the local player
   suspension: Suspension;
-  samples: Sample[]; // the host's reports, when mirroring
+  track: Track; // the host's reports, when mirroring
 };
 
 /** A car traffic must respect: the local player or a rival. `rect` carries its size and heading. */
@@ -38,7 +38,7 @@ export type Driver = { d: number; x: number; speed: number; rect: Rect };
 
 export class Traffic {
   remote = false; // true: mirror the host's traffic instead of simulating it
-  netTime = 0; // server time (ms) at which mirrored traffic is drawn
+  netNow = 0; // server time (ms) now: mirrored traffic is drawn where it is at that time (predicted)
   private scene: THREE.Scene;
   private models: Prefab[];
   private heavyFrom: number;
@@ -74,7 +74,7 @@ export class Traffic {
 
     for (const c of this.cars) {
       const before = c.d - me.d;
-      if (this.remote) this.mirror(c);
+      if (this.remote) this.mirror(c, dt);
       else {
         this.drive(c, dt, drivers);
         c.d += c.speed * dt;
@@ -124,8 +124,8 @@ export class Traffic {
     }));
   }
 
-  /** Mirrors the host's traffic: adds new cars, drops gone ones, and steers the rest toward the snapshot. */
-  applySnapshot(cars: TrafficCar[], time: number) {
+  /** Mirrors the host's traffic, simulated at server time `time` and arriving at `now`: adds new cars, drops gone ones, feeds the rest's predictions. */
+  applySnapshot(cars: TrafficCar[], time: number, now: number) {
     const byId = new Map(this.cars.map((c) => [c.id, c]));
     const keep = new Set<number>();
     for (const s of cars) {
@@ -136,7 +136,7 @@ export class Traffic {
         c = this.add(s.model, s.d, s.x, s.speed, s.heavy, s.id);
         byId.set(s.id, c);
       }
-      pushSample(c.samples, { t: time, d: s.d, x: s.x, heading: s.yaw, speed: s.speed, steer: 0 });
+      addReport(c.track, { t: time, d: s.d, x: s.x, heading: -s.yaw, speed: s.speed, steer: 0 }, now); // yaw is the mesh rotation: heading's opposite
       c.braking = s.brake;
       c.target = s.blink === 0 ? c.lane : c.lane + s.blink;
       setBrakeLights(c.v, s.brake);
@@ -148,12 +148,12 @@ export class Traffic {
     });
   }
 
-  /** Mirrored car: drawn at `netTime`, between two of the host's reports. */
-  private mirror(c: Car) {
-    const s = sampleAt(c.samples, this.netTime);
+  /** Mirrored car: drawn where it is at `netNow`, predicted from the host's reports (net/interp.ts). */
+  private mirror(c: Car, dt: number) {
+    const s = present(c.track, this.netNow, dt);
     if (!s) return;
     Object.assign(c, { d: s.d, x: s.x, speed: s.speed });
-    c.v.mesh.rotation.y = s.heading;
+    c.v.mesh.rotation.y = -s.heading;
     c.lane = LANES.reduce((best, lx, i) => (Math.abs(lx - c.x) < Math.abs(LANES[best] - c.x) ? i : best), 0);
   }
 
@@ -238,7 +238,7 @@ export class Traffic {
     v.mesh.position.set(x, 0, this.viewD - d); // in place right away, not only from the next frame
     this.scene.add(v.mesh);
     const lane = LANES.reduce((best, lx, i) => (Math.abs(lx - x) < Math.abs(LANES[best] - x) ? i : best), 0);
-    const car: Car = { id, model, v, lane, target: lane, x, d, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), samples: [] };
+    const car: Car = { id, model, v, lane, target: lane, x, d, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
     this.cars.push(car);
     return car;
   }

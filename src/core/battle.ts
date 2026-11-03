@@ -3,7 +3,6 @@
 import type * as THREE from 'three';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
-import { adaptDelay, INTERP_DELAY } from '../net/interp.ts';
 import type { CarState, PlayerInfo, ServerMessage } from '../net/protocol.ts';
 import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
@@ -45,14 +44,11 @@ export class Battle {
   private clockOffset = 0; // server clock − my clock (ms), as used: eases toward clockTarget
   private clockTarget = NaN; // latest measured offset (ms)
   private bestRtt = Infinity;
-  private delay = INTERP_DELAY; // ms: how far in the past rivals and mirrored traffic are drawn
-  private peak = 0; // ms: worst recent lateness of a report (see adaptDelay)
   /** Round trip to the server (ms), smoothed. */
   ping = 0;
-  /** For the HUD: render delay (ms) and how many times per second a rival had no report in hand (`gaps`). */
-  link = { delay: INTERP_DELAY, gaps: 0 };
-  private gaps = 0;
-  private gapsT = 0;
+  /** For the HUD, over the last second of rival reports: how far ahead of them we predict (ms) and the average correction each brought (m). */
+  link = { ahead: 0, fix: 0 };
+  private tally = { ahead: 0, fix: 0, n: 0, t: 0 };
 
   private constructor(scene: THREE.Scene, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
     this.rivals = new Rivals(scene, fleet);
@@ -90,24 +86,17 @@ export class Battle {
     return performance.now() + this.clockOffset;
   }
 
-  /** Moves rivals and mirrored traffic: drawn a little in the past (adaptive delay), between real reports. */
+  /** Moves rivals and mirrored traffic to where they are now, predicted from their reports (net/interp.ts). */
   sync(dt: number, myD: number) {
-    ({ delay: this.delay, peak: this.peak } = adaptDelay(this.delay, this.peak, dt));
     const step = dt * 1000 * CLOCK_SLEW;
     if (!Number.isNaN(this.clockTarget)) this.clockOffset += Math.max(-step, Math.min(step, this.clockTarget - this.clockOffset));
-    const now = this.serverNow();
-    this.traffic.netTime = now - this.delay;
-    this.gaps += this.rivals.update(dt, myD, now - this.delay, now);
-    this.gapsT += dt;
-    if (this.gapsT >= 1) {
-      this.link = { delay: this.delay, gaps: this.gaps / this.gapsT };
-      this.gaps = this.gapsT = 0;
+    const now = this.serverNow(), tl = this.tally;
+    this.traffic.netNow = now;
+    this.rivals.update(dt, myD, now);
+    if ((tl.t += dt) >= 1) {
+      this.link = tl.n ? { ahead: tl.ahead / tl.n, fix: tl.fix / tl.n } : { ahead: 0, fix: 0 };
+      this.tally = { ahead: 0, fix: 0, n: 0, t: 0 };
     }
-  }
-
-  /** A report simulated at server time `t` just arrived: how late it is feeds the jitter buffer. */
-  private arrived(t: number) {
-    this.peak = Math.max(this.peak, this.serverNow() - t);
   }
 
   nameOf(id: string) {
@@ -156,15 +145,15 @@ export class Battle {
       const snap = decodeSnapshot(buf);
       for (const c of snap.cars) {
         const id = this.grid[c.slot];
-        if (id && id !== this.me) {
-          this.rivals.setState(id, c.state, snap.time - c.age);
-          this.arrived(snap.time - c.age);
-        }
+        if (!id || id === this.me) continue;
+        const t = snap.time - c.age, now = this.serverNow(), tl = this.tally;
+        tl.fix += this.rivals.setState(id, c.state, t, now);
+        tl.ahead += now - t;
+        tl.n++;
       }
     } else if (buf[0] === BIN.TRAFFIC && !this.isHost) {
       const t = decodeTraffic(buf);
-      this.traffic.applySnapshot(t.cars, t.time);
-      this.arrived(t.time);
+      this.traffic.applySnapshot(t.cars, t.time, this.serverNow());
     }
   }
 
