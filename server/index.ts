@@ -90,6 +90,9 @@ wss.on('connection', (ws, req) => {
     if (m.t === 'car') {
       const car = clean(m.car, 32, /^[a-z0-9-]{1,32}$/);
       if (car) room.setCar(id, car);
+    } else if (m.t === 'spec') {
+      const car = m.car === null ? null : clean(m.car, 32, /^[a-z0-9-]{1,32}$/);
+      if (car !== null || m.car === null) room.setSpec(id, car);
     } else if (m.t === 'start') room.start(id);
     else if (m.t === 'out') room.eliminate(id, m.reason === 'wall' ? 'wall' : 'crash');
   });

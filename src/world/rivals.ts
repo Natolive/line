@@ -18,6 +18,7 @@ export type Rival = {
   score: number;
   alive: boolean;
   track: Track;
+  tag: THREE.Sprite;
 };
 
 /** A name tag that always faces the camera. */
@@ -62,7 +63,7 @@ export class Rivals {
     v.mesh.add(tag);
     setBrakeLights(v, false);
     this.scene.add(v.mesh);
-    this.all.set(info.id, { info, v, d, x, heading: 0, speed: 0, score: 0, alive: true, track: track() });
+    this.all.set(info.id, { info, v, d, x, heading: 0, speed: 0, score: 0, alive: true, track: track(), tag });
   }
 
   remove(id: string) {
@@ -102,6 +103,18 @@ export class Rivals {
         for (const p of r.v.steerPivots) p.rotation.y = -s.steer;
         spinWheels(r.v, r.speed * dt);
       }
+    }
+    this.place(myD);
+  }
+
+  /** Hides the name tag of the rival the camera rides behind (it would sit in the middle of the view). */
+  focus(id: string | null) {
+    for (const r of this.all.values()) r.tag.visible = r.info.id !== id;
+  }
+
+  /** Places every rival relative to the road position `myD` the world is drawn around. */
+  place(myD: number) {
+    for (const r of this.all.values()) {
       r.v.mesh.position.set(r.x, 0, myD - r.d);
       r.v.mesh.rotation.y = -r.heading;
     }

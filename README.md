@@ -38,7 +38,11 @@ You're out if the storm catches you, if you hit traffic, or if you ram another d
 
 Lighter contact between drivers just shoves you aside, with sparks.
 
+Once you're out, you spectate: the camera rides with the nearest driver still racing; `←` `→` (or a tap) switches driver.
+
 The last driver on the road wins; everyone sees the final ranking, then `Space` goes back to the lobby.
+
+In the lobby, the host can put everyone on the same figures (power, weight, gearing, brakes) as one garage car, so only driving makes the difference; each player keeps the look of their own car.
 
 To try it alone, open the game in two browser windows and join the same room code.
 

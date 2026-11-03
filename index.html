@@ -93,15 +93,17 @@
     <p class="label">Room code</p>
     <h2 class="code" id="lobby-code"></h2>
     <ul class="players" id="lobby-players"></ul>
+    <button class="text-btn" id="lobby-spec" type="button"></button>
+    <p class="label" id="lobby-spec-info"></p>
     <button class="text-btn primary" id="lobby-start">Start the race (Space)</button>
     <p class="label" id="lobby-wait">Waiting for the host to start…</p>
     <button class="text-btn" id="lobby-leave">Leave room (Esc)</button>
   </section>
 
   <section class="screen" id="screen-out" hidden>
-    <h2 class="danger" id="out-title">Wrecked</h2>
-    <div class="final" id="out-place"></div>
-    <p class="label">Watching the others…</p>
+    <p><b class="danger" id="out-title">Wrecked</b> · <b id="out-place"></b></p>
+    <p class="watching" id="out-watch"></p>
+    <p class="label" id="out-hint">← → or tap: switch driver</p>
   </section>
 
   <section class="screen" id="screen-results" hidden>

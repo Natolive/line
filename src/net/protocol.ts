@@ -21,13 +21,14 @@ export type TrafficCar = { id: number; model: number; heavy: boolean; d: number;
 export type ClientMessage =
   | { t: 'join'; room: string; name: string; car: string }
   | { t: 'car'; car: string } // changed car in the lobby
+  | { t: 'spec'; car: string | null } // host only, in the lobby: everyone drives with this garage car's figures (id), or each their own (null)
   | { t: 'start' } // host only
   | { t: 'out'; reason: 'crash' | 'wall'; d: number } // I'm eliminated
   | { t: 'ping'; c: number }; // client clock (ms), for round trip and clock sync
 
 export type ServerMessage =
-  | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean }
-  | { t: 'lobby'; host: string; players: PlayerInfo[] }
+  | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean; spec: string | null }
+  | { t: 'lobby'; host: string; players: PlayerInfo[]; spec: string | null } // spec: see the 'spec' client message
   | { t: 'error'; message: string }
   | { t: 'go'; startsIn: number; grid: string[] } // countdown in ms; grid = starting order, index = slot in snapshots
   | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)

@@ -32,6 +32,7 @@ export class Battle {
   host = '';
   room = '';
   players: PlayerInfo[] = [];
+  spec: string | null = null; // the room's setting: garage car id whose figures everyone drives with, or null
   readonly rivals: Rivals;
   private net = new Net();
   private traffic: Traffic;
@@ -105,6 +106,11 @@ export class Battle {
 
   setCar(car: string) {
     this.net.send({ t: 'car', car });
+  }
+
+  /** Host only: everyone drives with garage car `car`'s figures, or each their own (null). */
+  setSpec(car: string | null) {
+    this.net.send({ t: 'spec', car });
   }
 
   start() {
@@ -181,11 +187,13 @@ export class Battle {
         this.room = m.room;
         this.host = m.host;
         this.players = m.players;
+        this.spec = m.spec;
         this.traffic.remote = !this.isHost;
         return this.events.lobby();
       case 'lobby':
         this.host = m.host;
         this.players = m.players;
+        this.spec = m.spec;
         this.traffic.remote = !this.isHost; // the host leaving hands the traffic to the next player
         for (const id of this.rivals.all.keys()) if (!m.players.some((p) => p.id === id)) this.rivals.out(id);
         return this.events.lobby();

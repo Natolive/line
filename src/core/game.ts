@@ -15,6 +15,7 @@ import type { World } from '../world/assets.ts';
 import { Effects } from '../world/effects.ts';
 import { Environment } from '../world/environment.ts';
 import { Player } from '../world/player.ts';
+import type { Rival } from '../world/rivals.ts';
 import { Road } from '../world/road.ts';
 import { Scenery } from '../world/scenery.ts';
 import { Smoke } from '../world/smoke.ts';
@@ -23,6 +24,7 @@ import { Traffic, type Driver } from '../world/traffic.ts';
 import type { Fleet } from '../world/vehicles/fleet.ts';
 import { setNight } from '../world/vehicles/lights.ts';
 import { Battle } from './battle.ts';
+import type { Car } from '../data/cars/index.ts';
 import { BUMP, CRASH_DURATION, NEAR_MISS, START_SPEED } from './config.ts';
 
 type State = Screen | 'crash';
@@ -51,6 +53,8 @@ export class Game {
   private time = 0;
   private nearMisses = 0;
   private crashT = 0;
+  private wreckD = 0; // road position where I crashed: the world may scroll on with someone else (spectating)
+  private watching: string | null = null; // the rival the camera follows once I'm out
   private scrapeCooldown = 0;
   private idleT = 0;
   private best = Number(load(BEST_KEY)) || 0;
@@ -76,11 +80,17 @@ export class Game {
     this.showCar();
     this.input = new Input({
       action: () => this.action(),
-      cycle: (dir) => { if (this.state === 'menu') this.cycleCar(dir); },
+      cycle: (dir) => {
+        if (this.state === 'menu') this.cycleCar(dir);
+        else if (this.state === 'out') this.switchWatch(dir);
+      },
       pause: () => this.back(),
       mute: () => this.sfx.toggleMute(),
       battle: () => { if (this.state === 'menu') this.setState('mp'); },
-      tap: () => { if (['menu', 'over', 'pause'].includes(this.state)) this.action(); },
+      tap: () => {
+        if (['menu', 'over', 'pause'].includes(this.state)) this.action();
+        else if (this.state === 'out') this.switchWatch(1);
+      },
     });
     this.hud.onPause(() => this.back());
     this.hud.onGarage((dir) => this.cycleCar(dir), () => this.setState('menu'));
@@ -89,6 +99,7 @@ export class Game {
       join: (name, room) => this.join(name, room),
       start: () => this.battle?.start(),
       leave: () => this.leaveBattle(),
+      spec: () => this.cycleSpec(),
     });
     this.hud.setName(load(NAME_KEY) ?? '');
     document.addEventListener('visibilitychange', () => {
@@ -153,10 +164,12 @@ export class Game {
     this.hud.setCar(car, measure(car.physics), this.carIndex, GARAGE.length);
   }
 
-  /** Puts everything back on the start line; the car rolls off from road position (d, x). */
-  private startRace(d = 0, x?: number) {
+  /** Puts everything back on the start line; the car rolls off from road position (d, x), driving with `spec`'s figures if given. */
+  private startRace(d = 0, x?: number, spec: Car | null = null) {
     this.score = this.time = this.nearMisses = 0;
     this.dist = d;
+    this.watching = null;
+    this.player.spec = spec;
     this.zone = themeIndexAt(d, THEMES.length);
     this.scenery.reset(d);
     this.road.reset(d);
@@ -191,10 +204,13 @@ export class Game {
       this.battle = await Battle.join(room, name, GARAGE[this.carIndex].model, this.stage.scene, this.fleet, this.traffic, {
         lobby: () => {
           if (this.state === 'mp') this.setState('lobby');
-          this.hud.setLobby(this.battle!.room, this.battle!.players, this.battle!.host, this.battle!.me);
+          const b = this.battle!;
+          this.hud.setLobby(b.room, b.players, b.host, b.me, specCar(b.spec)?.name ?? null);
         },
         go: (slot) => {
-          this.startRace(slot.d, slot.x);
+          const spec = specCar(this.battle!.spec);
+          this.startRace(slot.d, slot.x, spec);
+          if (spec) this.hud.popup(`Everyone drives with ${spec.name} figures`);
           this.hud.setBattle({ alive: this.battle!.players.length, total: this.battle!.players.length, wall: this.dist - this.battle!.wall(), place: 0, ping: this.battle!.ping, ...this.battle!.link });
           this.setState('countdown');
         },
@@ -228,8 +244,48 @@ export class Game {
   private leaveBattle(toMenu = true) {
     this.battle?.leave();
     this.battle = null;
+    this.player.spec = null;
+    this.player.reset(0); // back from wherever spectating left the wreck
     this.traffic.reset(this.me);
     if (toMenu) this.setState('menu');
+  }
+
+  /** Host, in the lobby: each their own car figures → everyone on the first garage car's → the next's → … → back. */
+  private cycleSpec() {
+    const b = this.battle;
+    if (!b?.isHost) return;
+    const options = [null, ...GARAGE.map((c) => c.id)];
+    b.setSpec(options[(options.indexOf(b.spec) + 1) % options.length]);
+  }
+
+  // ---- spectating ----
+
+  /** The rival the camera follows while I'm out: kept while it races, else the one nearest the view. */
+  private watched() {
+    const racing = [...this.battle!.rivals.all.values()].filter((r) => r.alive);
+    const kept = racing.find((r) => r.info.id === this.watching);
+    if (kept) return kept;
+    const next = racing.sort((a, b) => Math.abs(a.d - this.dist) - Math.abs(b.d - this.dist))[0];
+    if (next) this.watch(next);
+    else this.battle!.rivals.focus(null);
+    return next ?? null;
+  }
+
+  /** Cuts to rival `r`: the world is redrawn around them. */
+  private watch(r: Rival) {
+    this.watching = r.info.id;
+    this.dist = r.d;
+    this.road.reset(r.d);
+    this.scenery.reset(r.d);
+    this.battle!.rivals.focus(r.info.id);
+  }
+
+  /** ← / →: the driver ahead of or behind the one watched, looping round the field. */
+  private switchWatch(dir: -1 | 1) {
+    const racing = [...this.battle!.rivals.all.values()].filter((r) => r.alive).sort((a, b) => b.d - a.d);
+    if (racing.length < 2) return;
+    const i = racing.findIndex((r) => r.info.id === this.watching);
+    this.watch(racing[(i + dir + racing.length) % racing.length]);
   }
 
   /** My car, as rivals receive it. */
@@ -273,23 +329,38 @@ export class Game {
         return;
       }
       case 'crash':
-      case 'out':
+      case 'out': {
         this.player.update(dt, IDLE);
-        this.traffic.update(dt, this.me, b?.rivals.drivers() ?? [], this.dist / 1000, !b); // traffic brakes for the wreck
+        let forward = 0, cam = { x: p.x, heading: p.heading, speed: 0 };
         if (b) {
           b.sync(dt, this.dist);
+          // out: ride with a rival still racing; the road, scenery and traffic scroll with them
+          const r = this.state === 'out' ? this.watched() : null;
+          if (r) {
+            forward = r.d - this.dist;
+            this.dist = r.d;
+            b.rivals.place(this.dist);
+            this.road.update(forward, this.dist);
+            this.scenery.update(forward, this.dist);
+            const limiter = (specCar(b.spec) ?? GARAGE.find((c) => c.model === r.info.car) ?? GARAGE[0]).physics.limiterKmh;
+            cam = { x: r.x, heading: r.heading, speed: (r.speed * 3.6) / limiter };
+            this.hud.setWatching(r.info.name, r.speed * 3.6, this.battleStats().alive);
+          }
           b.publish(dt, null);
           this.hud.setBattle(this.battleStats());
         }
-        this.fx.update(dt, 0);
-        this.smoke.update(dt, 0);
-        if (Math.random() < dt * 25) this.puff(this.player.car.mesh.position.clone().setY(0.8), 0x2b2b2b, 1.2, 4, 2.5, 0.55);
-        this.stage.follow(p.x, p.heading, 0, dt);
+        const wreck = this.player.car.mesh.position.setZ(this.dist - this.wreckD);
+        this.traffic.update(dt, this.me, b?.rivals.drivers() ?? [], this.dist / 1000, !b); // solo: traffic brakes for the wreck
+        this.fx.update(dt, forward);
+        this.smoke.update(dt, forward);
+        if (Math.abs(wreck.z) < 150 && Math.random() < dt * 25) this.puff(wreck.clone().setY(0.8), 0x2b2b2b, 1.2, 4, 2.5, 0.55);
+        this.stage.follow(cam.x, cam.heading, cam.speed, dt);
         if (this.state === 'crash' && (this.crashT -= dt) <= 0) {
           if (b) this.setState('out');
           else this.gameOver();
         }
         return;
+      }
       default:
         this.idleT += dt;
         this.fx.update(dt, 0);
@@ -328,7 +399,7 @@ export class Game {
       this.sfx.scrape();
     }
 
-    const { gear, rpm } = this.player, car = this.player.model;
+    const { gear, rpm } = this.player, car = this.player.driven;
     const screech = Math.min(1, Math.max(0, (Math.abs(this.player.lateralAccel) / this.player.physics.grip - 0.85) / 0.15));
     this.sfx.setEngine(rpm, input.throttle, car.physics.redline, car.specs);
     this.sfx.setScreech(screech);
@@ -373,6 +444,7 @@ export class Game {
     this.sfx.silenceLoops();
     this.sfx.crash();
     this.battle?.eliminated(reason, this.dist);
+    this.wreckD = this.dist;
     this.crashT = CRASH_DURATION;
     this.setState('crash');
   }
@@ -389,6 +461,9 @@ export class Game {
     this.setState('over');
   }
 }
+
+/** The garage car a room's `spec` names (see Battle.spec), if any. */
+const specCar = (id: string | null) => (id ? GARAGE.find((c) => c.id === id) ?? null : null);
 
 const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
 

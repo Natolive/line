@@ -33,6 +33,7 @@ export class Hud {
   show(screen: Screen) {
     $('screen-loading').hidden = true;
     this.hud.hidden = !['play', 'pause', 'countdown', 'out'].includes(screen);
+    this.hud.dataset.screen = screen;
     for (const [name, el] of Object.entries(this.screens)) el.hidden = name !== screen;
     if (screen === 'mp') ($('mp-name') as HTMLInputElement).focus();
     if (!['play', 'countdown', 'out'].includes(screen)) this.setBattle(null);
@@ -40,7 +41,7 @@ export class Hud {
 
   // ---- battle royale ----
 
-  onBattle(h: { open(): void; join(name: string, room: string): void; start(): void; leave(): void }) {
+  onBattle(h: { open(): void; join(name: string, room: string): void; start(): void; leave(): void; spec(): void }) {
     const room = $('mp-room') as HTMLInputElement, name = $('mp-name') as HTMLInputElement;
     room.value = Math.random().toString(36).slice(2, 7).toUpperCase().replace(/[^A-Z0-9]/g, 'X'); // a fresh code to share
     $('to-battle').addEventListener('click', h.open);
@@ -49,6 +50,7 @@ export class Hud {
       h.join(name.value.trim(), room.value.trim().toUpperCase());
     });
     $('lobby-start').addEventListener('click', h.start);
+    $('lobby-spec').addEventListener('click', h.spec);
     for (const id of ['lobby-leave', 'results-leave', 'mp-back']) $(id).addEventListener('click', h.leave);
   }
 
@@ -60,7 +62,8 @@ export class Hud {
     $('mp-error').textContent = message;
   }
 
-  setLobby(room: string, players: PlayerInfo[], host: string, me: string) {
+  /** `spec`: the name of the car whose figures everyone drives with, or null (each their own). */
+  setLobby(room: string, players: PlayerInfo[], host: string, me: string, spec: string | null) {
     $('lobby-code').textContent = room;
     const list = $('lobby-players');
     list.replaceChildren(...players.map((p) => {
@@ -74,6 +77,11 @@ export class Hud {
     const isHost = host === me;
     $('lobby-start').hidden = !isHost;
     $('lobby-wait').hidden = isHost;
+    const text = spec ? `Same figures for all: ${spec}` : 'Each driver\'s own car figures';
+    $('lobby-spec').hidden = !isHost;
+    $('lobby-spec').textContent = `${text} ▸`;
+    $('lobby-spec-info').hidden = isHost;
+    $('lobby-spec-info').textContent = text;
   }
 
   setFps(fps: number) {
@@ -111,6 +119,15 @@ export class Hud {
   setEliminated(place: number, reason: string) {
     $('out-title').textContent = reason === 'wall' ? 'Caught by the storm' : 'Wrecked';
     $('out-place').textContent = `${place}${place === 1 ? 'st' : place === 2 ? 'nd' : place === 3 ? 'rd' : 'th'}`;
+    this.setWatching(null, 0, 0);
+  }
+
+  /** Spectating: whom the camera follows (null: nobody left), at what speed, out of how many still racing. */
+  setWatching(name: string | null, kmh: number, racing: number) {
+    const text = name ? `Watching ${name} · ${Math.round(kmh)} km/h` : '';
+    const el = $('out-watch');
+    if (el.textContent !== text) el.textContent = text;
+    $('out-hint').hidden = racing < 2;
   }
 
   setResults(ranking: string[], won: boolean) {

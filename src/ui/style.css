@@ -189,6 +189,12 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
 .ranking li::before { counter-increment: rank; content: counter(rank) '.'; color: var(--gold); margin-right: auto; padding-right: 12px; }
 .ranking li { justify-content: flex-start; }
 
+/* spectating: the race stays visible, the caption sits at the bottom; my frozen score and gauges go */
+#hud[data-screen="out"] .dash, #hud[data-screen="out"] .hud-top > div:first-child { visibility: hidden; }
+#screen-out { justify-content: flex-end; padding-bottom: 48px; background: linear-gradient(rgb(15 18 24 / 0) 70%, rgb(15 18 24 / 0.6)); }
+#screen-out b { text-transform: uppercase; letter-spacing: 0.06em; }
+.watching { font-size: 28px; font-weight: 700; font-style: italic; }
+
 /* zone sign: fades in, holds, fades out */
 #zone {
   position: absolute;

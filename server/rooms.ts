@@ -12,6 +12,7 @@ export class Room {
   readonly code: string;
   host = '';
   racing = false;
+  spec: string | null = null; // garage car id whose figures everyone drives with, or null: each their own
   private members = new Map<string, Member>();
   private out: string[] = []; // eliminated this race, first out first
 
@@ -33,8 +34,8 @@ export class Room {
     if (this.members.size >= MAX_PLAYERS) return `This room is full (${MAX_PLAYERS} players).`;
     this.members.set(info.id, { info, send, alive: false, slot: -1, latest: null, at: 0 });
     if (!this.host) this.host = info.id;
-    send({ t: 'joined', you: info.id, room: this.code, host: this.host, players: this.players, racing: this.racing });
-    this.broadcast({ t: 'lobby', host: this.host, players: this.players }, info.id);
+    send({ t: 'joined', you: info.id, room: this.code, host: this.host, players: this.players, racing: this.racing, spec: this.spec });
+    this.broadcastLobby(info.id);
     return null;
   }
 
@@ -44,7 +45,7 @@ export class Room {
     if (this.racing && m.alive) this.eliminate(id, 'left');
     this.members.delete(id);
     if (this.host === id) this.host = this.members.keys().next().value ?? ''; // the next player takes over (and the traffic)
-    this.broadcast({ t: 'lobby', host: this.host, players: this.players });
+    this.broadcastLobby();
     this.checkWinner();
   }
 
@@ -52,7 +53,18 @@ export class Room {
     const m = this.members.get(id);
     if (!m || this.racing) return;
     m.info.car = car;
-    this.broadcast({ t: 'lobby', host: this.host, players: this.players });
+    this.broadcastLobby();
+  }
+
+  /** Host only, between races: same figures for everyone (a garage car id, already validated) or each their own. */
+  setSpec(by: string, car: string | null) {
+    if (by !== this.host || this.racing) return;
+    this.spec = car;
+    this.broadcastLobby();
+  }
+
+  private broadcastLobby(except?: string) {
+    this.broadcast({ t: 'lobby', host: this.host, players: this.players, spec: this.spec }, except);
   }
 
   start(by: string) {

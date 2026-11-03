@@ -10,7 +10,8 @@ import { Suspension } from './suspension.ts';
 
 export class Player {
   car!: Vehicle;
-  model!: Car;
+  model!: Car; // the car you see
+  spec: Car | null = null; // whose figures it drives with, when a room puts everyone on the same ones
   state: VehicleState = { x: 0, heading: 0, speed: 0, steer: 0 };
   lateralAccel = 0;
   gear = 1;
@@ -28,8 +29,13 @@ export class Player {
     this.choose(choice);
   }
 
+  /** The car whose figures the physics, the gauges and the engine sound follow. */
+  get driven() {
+    return this.spec ?? this.model;
+  }
+
   get physics() {
-    return this.model.physics;
+    return this.driven.physics;
   }
 
   /** Swaps in another garage car. */

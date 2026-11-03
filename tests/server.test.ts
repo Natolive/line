@@ -77,3 +77,17 @@ test('a car is sent once: a tick with no new report does not repeat it under a n
   const snaps = inbox.p0.filter((m): m is Uint8Array => m instanceof Uint8Array);
   assert.equal(snaps.length, 1);
 });
+
+test('the host can give everyone the same car figures between races; every player, even a late one, is told', () => {
+  const { r, last } = room(2);
+  r.setSpec('p1', 'bmw'); // not the host
+  assert.equal(r.spec, null);
+  r.setSpec('p0', 'bmw');
+  assert.deepEqual(last('p1', 'lobby'), { t: 'lobby', host: 'p0', players: r.players, spec: 'bmw' });
+  const got: ServerMessage[] = [];
+  r.join({ id: 'p9', name: 'p9', car: 'car-bmw' }, (m) => got.push(m as ServerMessage));
+  assert.equal(got[0].t === 'joined' && got[0].spec, 'bmw');
+  r.start('p0');
+  r.setSpec('p0', null); // not during a race
+  assert.equal(r.spec, 'bmw');
+});
