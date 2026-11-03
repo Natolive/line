@@ -47,3 +47,10 @@ test('interpolation draws between reports and extrapolates only a little', () =>
   close(sampleAt(s, 200)!.d, 4, 1e-9); // 100 ms past the last report at 20 m/s
   close(sampleAt(s, 10_000)!.d, 2 + 20 * 0.25, 1e-9); // a silent player stops moving after 250 ms
 });
+
+test('extrapolation follows how far reports really advance, not the reported speed (laggy sender)', () => {
+  const s: Sample[] = [];
+  for (let t = 0; t <= 200; t += 66) pushSample(s, { t, d: t * 0.015, x: 0, heading: 0, speed: 20, steer: 0 }); // 15 m/s on the road, 20 on the dial
+  const last = s[s.length - 1];
+  close(sampleAt(s, last.t + 100)!.d, last.d + 1.5, 1e-9);
+});

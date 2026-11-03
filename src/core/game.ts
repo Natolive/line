@@ -97,10 +97,16 @@ export class Game {
   }
 
   run() {
-    let last = performance.now();
+    let last = performance.now(), frames = 0, fpsAt = last;
     this.stage.renderer.setAnimationLoop((now) => {
       const dt = Math.min(0.05, (now - last) / 1000); // clamp so a lag spike can't teleport cars
       last = now;
+      frames++;
+      if (now - fpsAt >= 500) { // refresh the counter twice a second, so it's readable
+        this.hud.setFps((frames * 1000) / (now - fpsAt));
+        frames = 0;
+        fpsAt = now;
+      }
       this.update(dt);
       this.applyTheme();
       this.stage.render(this.fx.shake);

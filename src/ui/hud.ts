@@ -76,6 +76,10 @@ export class Hud {
     $('lobby-wait').hidden = isHost;
   }
 
+  setFps(fps: number) {
+    $('fps').textContent = String(Math.round(fps));
+  }
+
   /** Battle HUD; null hides it. */
   setBattle(s: BattleStats | null) {
     const box = $('battle'), vignette = $('storm');
