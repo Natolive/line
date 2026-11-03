@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRAFFIC, WALL } from '../src/core/config.ts';
+import { CARRIAGEWAY_HALF, GUARDRAIL_X, LANES, SHOULDER, TRAFFIC, WALL } from '../src/core/config.ts';
 import { GARAGE } from '../src/data/cars/index.ts';
 import { TRANSITION_LENGTH, ZONE_LENGTH } from '../src/data/themes.ts';
 import { rectsOverlap } from '../src/rules/collision.ts';
-import { densityAt, multiplierFor } from '../src/rules/difficulty.ts';
+import { densityAt, multiplierFor, onShoulder } from '../src/rules/difficulty.ts';
 import { stepSpring } from '../src/rules/spring.ts';
 import { themeBlend, themeIndexAt } from '../src/rules/themes.ts';
 import { wallAt, wallSpeedAt } from '../src/rules/wall.ts';
@@ -72,6 +72,19 @@ test('traffic density and score multiplier stay in range', () => {
   assert.equal(densityAt(1e4), TRAFFIC.densityMax);
   assert.equal(multiplierFor(120), 1);
   assert.equal(multiplierFor(260), 4);
+  assert.equal(onShoulder(LANES[3]), false);
+  assert.equal(onShoulder(LANES[0] - 3), true);
+  assert.equal(multiplierFor(260, LANES[3] + 3), 0); // the hard shoulder pays nothing
+});
+
+test('a broken-down car blocks the whole hard shoulder but not the right lane', () => {
+  const w = 2, l = 4.6; // a wide car
+  const parked = { x: SHOULDER.x, z: 0, w, l, heading: 0 };
+  assert.equal(rectsOverlap({ x: LANES[3], z: 0, w, l, heading: 0 }, parked), false);
+  for (let x = CARRIAGEWAY_HALF + 0.01; x < GUARDRAIL_X - w / 2; x += 0.1) {
+    assert.ok(onShoulder(x));
+    assert.ok(rectsOverlap({ x, z: 0, w, l, heading: 0 }, parked), `slipped past at x = ${x}`);
+  }
 });
 
 test('suspension spring rebounds once, then settles on its target', () => {

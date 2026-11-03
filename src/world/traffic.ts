@@ -2,11 +2,11 @@
 // Positions are along the road (`d`, meters from the start), so the same traffic can be shared online:
 // one game simulates it ('local': solo, or the room host) and the others mirror it ('remote').
 import type * as THREE from 'three';
-import { LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, TRAFFIC as T } from '../core/config.ts';
+import { LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, SHOULDER, TRAFFIC as T } from '../core/config.ts';
 import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { TrafficCar } from '../net/protocol.ts';
 import { rectsOverlap, type Rect } from '../rules/collision.ts';
-import { densityAt } from '../rules/difficulty.ts';
+import { densityAt, onShoulder } from '../rules/difficulty.ts';
 import type { Fleet } from './vehicles/fleet.ts';
 import { setBlinker, setBrakeLights } from './vehicles/lights.ts';
 import { spawn, spinWheels, type Prefab, type Vehicle } from './vehicles/prefab.ts';
@@ -14,6 +14,7 @@ import { Suspension } from './suspension.ts';
 
 const kmh = (k: number) => k / 3.6;
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
+const nextGap = () => SHOULDER.breakdownGap * (0.5 + Math.random());
 
 type Car = {
   id: number;
@@ -33,6 +34,9 @@ type Car = {
   track: Track; // the host's reports, when mirroring
 };
 
+/** Broken down on the hard shoulder: moving traffic never goes there, so position alone says it (host and mirrors alike). */
+const parked = (c: Car) => onShoulder(c.x);
+
 /** A car traffic must respect: the local player or a rival. `rect` carries its size and heading. */
 export type Driver = { d: number; x: number; speed: number; rect: Rect };
 
@@ -45,6 +49,7 @@ export class Traffic {
   private cars: Car[] = [];
   private clock = 0;
   private nextId = 1;
+  private nextBreakdown = 0; // road position of the next broken-down car
   private viewD = 0; // road position of the local player: everything is drawn relative to it
 
   constructor(scene: THREE.Scene, fleet: Fleet) {
@@ -59,6 +64,7 @@ export class Traffic {
     for (const c of this.cars) this.scene.remove(c.v.mesh);
     this.cars = [];
     if (this.remote) return;
+    this.nextBreakdown = me.d + 150 + nextGap();
     for (let d = me.d + 70; d < me.d - T.spawnAhead; d += 22 + Math.random() * 25) this.trySpawn(d, [me]);
   }
 
@@ -75,7 +81,7 @@ export class Traffic {
     for (const c of this.cars) {
       const before = c.d - me.d;
       if (this.remote) this.mirror(c, dt);
-      else {
+      else if (!parked(c)) {
         this.drive(c, dt, drivers);
         c.d += c.speed * dt;
       }
@@ -90,7 +96,7 @@ export class Traffic {
       c.v.mesh.position.set(c.x, 0, me.d - c.d);
       if (!this.remote) c.v.mesh.rotation.y = c.target !== c.lane && c.blink <= 0 ? -Math.sign(lateral) * Math.atan(T.laneChangeSpeed / Math.max(c.speed, 1)) : 0;
       spinWheels(c.v, c.speed * dt);
-      setBlinker(c.v, c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, this.clock % 0.8 < 0.4);
+      setBlinker(c.v, c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, this.clock % 0.8 < 0.4, parked(c));
     }
     if (this.remote) return nearMisses;
 
@@ -102,8 +108,15 @@ export class Traffic {
       this.scene.remove(c.v.mesh);
       return false;
     });
+    const horizon = front - T.spawnAhead;
+    if (this.nextBreakdown < front) this.nextBreakdown = horizon; // e.g. just took over as host
+    if (this.nextBreakdown < horizon) {
+      const side = Math.random() < SHOULDER.breakdownRight ? 1 : -1;
+      this.add(pick(this.models.slice(0, this.heavyFrom).map((_, i) => i)), this.nextBreakdown, side * SHOULDER.x, 0, false);
+      this.nextBreakdown += nextGap();
+    }
     const wanted = Math.min(70, densityAt(km) * (1 + (front - back) / 500));
-    if (this.cars.length < wanted) {
+    if (this.cars.filter((c) => !parked(c)).length < wanted) {
       const speed = drivers.reduce((s, p) => s + p.speed, 0) / Math.max(1, drivers.length);
       // faster than traffic: new cars appear ahead; slower: they come up from behind
       const ahead = Math.random() < Math.min(1, Math.max(0.15, (speed * 3.6 - 60) / 70));
@@ -213,13 +226,13 @@ export class Traffic {
     const room = 12 + c.v.l + c.speed * 0.8;
     const occupies = (x: number) => Math.abs(x - LANES[lane]) < LANE_WIDTH * 0.85;
     if (drivers.some((p) => occupies(p.x) && Math.abs(p.d - c.d) < room)) return false;
-    return !this.cars.some((o) => o !== c && (occupies(o.x) || o.target === lane) && Math.abs(o.d - c.d) < room);
+    return !this.cars.some((o) => o !== c && !parked(o) && (occupies(o.x) || o.target === lane) && Math.abs(o.d - c.d) < room);
   }
 
   private trySpawn(d: number, drivers: Driver[]) {
     const behind = drivers.every((p) => d < p.d);
     // never let a cross-section of road fill up: keep at least two lanes open
-    if (this.cars.filter((c) => Math.abs(c.d - d) < 25).length > LANE_COUNT - 3) return;
+    if (this.cars.filter((c) => !parked(c) && Math.abs(c.d - d) < 25).length > LANE_COUNT - 3) return;
     const lanes = LANES.map((_, i) => i).sort(() => Math.random() - 0.5);
     for (const lane of lanes) {
       if (this.cars.some((c) => (c.lane === lane || c.target === lane) && Math.abs(c.d - d) < 30)) continue;

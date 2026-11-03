@@ -14,6 +14,8 @@ export class Net {
   private ready: Promise<void>;
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
+  private answer: () => void = () => {};
+  private answered = new Promise<void>((r) => (this.answer = r)); // the server's answer, applied: candidates go after it
 
   constructor() {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -26,8 +28,10 @@ export class Net {
     this.ws.addEventListener('message', (e) => {
       if (e.data instanceof ArrayBuffer) return this.onBinary(new Uint8Array(e.data));
       const m: ServerMessage = JSON.parse(e.data);
-      if (m.t === 'rtc') this.pc?.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch(() => this.dropUdp());
-      else if (m.t === 'ice') this.pc?.addIceCandidate({ candidate: m.c, sdpMid: m.mid }).catch(() => {});
+      const pc = this.pc;
+      // candidates wait for the answer to be applied (it's async): one added before it is rejected
+      if (m.t === 'rtc') pc?.setRemoteDescription({ type: 'answer', sdp: m.sdp }).then(this.answer, () => this.dropUdp());
+      else if (m.t === 'ice') this.answered.then(() => pc?.addIceCandidate({ candidate: m.c, sdpMid: m.mid })).catch(() => {});
       else this.onMessage(m);
     });
     this.ws.addEventListener('close', () => this.onClose());

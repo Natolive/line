@@ -373,7 +373,7 @@ export class Game {
   private tick(dt: number) {
     const input = this.input.read(), b = this.battle;
     const { forward, scraped } = this.player.update(dt, input);
-    const p = this.player.state, kmh = p.speed * 3.6, mult = multiplierFor(kmh);
+    const p = this.player.state, kmh = p.speed * 3.6, mult = multiplierFor(kmh, p.x);
     this.time += dt;
     this.dist += forward;
     this.score += forward * mult;

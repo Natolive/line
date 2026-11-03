@@ -5,6 +5,13 @@ export const LANE_COUNT = 4;
 export const LANES = Array.from({ length: LANE_COUNT }, (_, i) => (i - (LANE_COUNT - 1) / 2) * LANE_WIDTH);
 export const CARRIAGEWAY_HALF = (LANE_COUNT * LANE_WIDTH) / 2; // solid edge lines
 export const GUARDRAIL_X = CARRIAGEWAY_HALF + 2.5; // hard shoulder, then the rail
+// Hard shoulder: drivable, but no points, rumble-strip drag and broken-down cars, so it is never a shortcut past traffic.
+export const SHOULDER = {
+  x: (CARRIAGEWAY_HALF + GUARDRAIL_X) / 2, // m, where broken-down cars stand (either side)
+  drag: 3, // m/s² of extra deceleration with the car's centre past the edge line
+  breakdownGap: 400, // m on average between broken-down cars, randomised ±50%
+  breakdownRight: 0.75, // share on the right shoulder
+};
 
 export const SUSPENSION = {
   frequency: 1.6, // Hz, how fast the body bounces

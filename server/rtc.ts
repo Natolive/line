@@ -26,7 +26,12 @@ export class Rtc {
   offer(sdp: string) {
     if (this.pc) return;
     const pc = (this.pc = new PeerConnection('p', { iceServers: [], enableIceUdpMux: true, portRangeBegin: PORT, portRangeEnd: PORT }));
-    pc.onLocalDescription((sdp) => this.signal({ t: 'rtc', sdp }));
+    const mid = /^a=mid:(\S+)/m.exec(sdp)?.[1] ?? '0';
+    pc.onLocalDescription((answer) => {
+      this.signal({ t: 'rtc', sdp: answer });
+      // after the answer: a candidate before it is rejected. Behind NAT (the player's) only this one works: the game reaches us here.
+      if (PUBLIC_IP) this.signal({ t: 'ice', c: `candidate:1 1 UDP 2122317823 ${PUBLIC_IP} ${PORT} typ host`, mid });
+    });
     pc.onLocalCandidate((c, mid) => {
       if (!PUBLIC_IP) this.signal({ t: 'ice', c, mid });
     });
@@ -43,8 +48,6 @@ export class Rtc {
     } catch {
       return this.close(); // malformed offer: stay on the WebSocket
     }
-    const mid = /^a=mid:(\S+)/m.exec(sdp)?.[1] ?? '0';
-    if (PUBLIC_IP) this.signal({ t: 'ice', c: `candidate:1 1 UDP 2122317823 ${PUBLIC_IP} ${PORT} typ host`, mid });
   }
 
   candidate(c: string, mid: string) {

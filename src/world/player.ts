@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { GUARDRAIL_X, LANES } from '../core/config.ts';
+import { GUARDRAIL_X, LANES, SHOULDER } from '../core/config.ts';
 import type { Car } from '../data/cars/index.ts';
 import type { Rect } from '../rules/collision.ts';
+import { onShoulder } from '../rules/difficulty.ts';
 import { stepVehicle, type DriveInput, type VehicleState } from '../rules/vehicle.ts';
 import type { Fleet } from './vehicles/fleet.ts';
 import { setBrakeLights } from './vehicles/lights.ts';
@@ -85,6 +86,7 @@ export class Player {
     this.gear = r.gear;
     this.rpm = r.rpm;
     let s = r.state, scraped = false;
+    if (onShoulder(s.x)) s = { ...s, speed: Math.max(0, s.speed - SHOULDER.drag * dt) };
     // Guardrail: clamp, bleed speed, deflect the nose away from the rail.
     const reach = (car.w / 2) * Math.cos(s.heading) + (car.l / 2) * Math.abs(Math.sin(s.heading));
     const limit = GUARDRAIL_X - 0.1 - reach;

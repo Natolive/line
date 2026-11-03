@@ -134,7 +134,7 @@ export function setBrakeLights(v: Vehicle, on: boolean) {
 }
 
 /** dir: -1 left, 1 right, 0 off. `phase` is the shared on/off beat so all blinkers flash together. */
-export function setBlinker(v: Vehicle, dir: -1 | 0 | 1, phase: boolean) {
-  for (const b of v.blinkL) b.visible = phase && dir < 0;
-  for (const b of v.blinkR) b.visible = phase && dir > 0;
+export function setBlinker(v: Vehicle, dir: -1 | 0 | 1, phase: boolean, hazard = false) {
+  for (const b of v.blinkL) b.visible = phase && (hazard || dir < 0);
+  for (const b of v.blinkR) b.visible = phase && (hazard || dir > 0);
 }
