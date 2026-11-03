@@ -19,6 +19,20 @@ const children = (scene: THREE.Object3D, container: string) => {
 };
 const plain = (name: string) => name.replace(/[^A-Za-z0-9]/g, ''); // GLTFLoader strips dots from node names
 
+/**
+ * Wheels for models that split them into tyre, rim, disc...: tyres go first (their size sets the wheel radius),
+ * and every part that fits inside a tyre spins with it, except brake calipers, which don't turn.
+ */
+function tyred(parts: THREE.Object3D[], isTyre: (o: THREE.Object3D) => boolean) {
+  const tyres = parts.filter(isTyre), outlines = tyres.map((t) => new THREE.Box3().setFromObject(t, true).expandByScalar(0.03));
+  const caliper = (o: THREE.Object3D) => { let found = false; o.traverse((c) => { found ||= /caliper/i.test(c.name); }); return found; };
+  const wheels = new Set(parts.filter((p) => {
+    const b = new THREE.Box3().setFromObject(p, true);
+    return isTyre(p) || (!b.isEmpty() && !caliper(p) && outlines.some((t) => t.containsBox(b)));
+  }));
+  return { parts: [...tyres, ...parts.filter((p) => !isTyre(p))], isWheel: (o: THREE.Object3D) => wheels.has(o) };
+}
+
 // How to read each garage car's file. Keys match `model` in src/data/cars/.
 const PLAYER_SPECS: Record<string, (scene: THREE.Object3D) => Spec> = {
   'car-lambo': (s) => {
@@ -28,6 +42,13 @@ const PLAYER_SPECS: Record<string, (scene: THREE.Object3D) => Spec> = {
       flipWinding: true,
     };
   },
+  'car-porsche': (s) => ({ ...tyred(children(s, 'GLTF_SceneRootNode'), (o) => /tyre/i.test(o.name)), forward: [0, 1], length: 4.573 }),
+  'car-gtr': (s) => ({ ...tyred(children(s, 'RootNode'), (o) => /^3_Wheel(00[246])?$/.test(o.name)), forward: [0, 1], length: 4.71 }),
+  'car-mustang': (s) => {
+    const wheels = ['FtL', 'FtR', 'BkL', 'BkR'].map((w) => s.getObjectByName(`GT500Wheel${w}`)!); // under the rig, away from the body
+    return { ...tyred([...children(s, 'GT500Body'), ...wheels], (o) => wheels.includes(o)), forward: [0, 1], length: 4.82 };
+  },
+  'car-f40': (s) => ({ ...tyred(children(s, 'f40objcleanermaterialmergergles'), (o) => ['Object_37', 'Object_38', 'Object_39', 'Object_40'].includes(o.name)), forward: [0, 1], length: 4.358 }),
   'car-bmw': (s) => {
     const root = children(s, 'RootNode'), empty = root.find((o) => o.name === 'Empty')!;
     const wheels = new Set(['Circle070', 'Circle068', 'Object442', 'Line005']);

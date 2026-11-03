@@ -25,7 +25,8 @@ export function pickGear(c: CarPhysics, speed: number, throttle: number) {
     if (rpm > c.redline) continue;
     if (throttle > 0) {
       const force = torqueAt(c, Math.max(rpm, c.idleRpm)) * c.gears[g];
-      if (force > bestForce) [best, bestForce] = [g, force];
+      // at constant power (past peak power) every gear pushes the same: take the taller one, not a rounding error's pick
+      if (force >= bestForce * (1 - 1e-9)) [best, bestForce] = [g, force];
     } else if (rpm >= 1600 || g === 0) best = g;
   }
   // pulling away: the clutch slips, so the engine sits around 3,500 rpm instead of idling

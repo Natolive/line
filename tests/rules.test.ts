@@ -55,6 +55,8 @@ test('the gearbox shifts up as speed rises and never over-revs', () => {
     assert.ok(last >= c.gears.length - 2, `flat out it should reach the top gears, got ${last}`);
   }
   assert.equal(pickGear(CAR, 30, 0).gear, 8, 'cruising at 108 km/h, an 8-speed sits in 8th (~1,700 rpm)');
+  const f40 = GARAGE.find((c) => c.id === 'f40')!.physics; // close ratios: 4th and 5th both past peak power near top speed
+  assert.equal(pickGear(f40, 82, 1).gear, 5, 'equal push: the taller gear, so it never drops a gear at full throttle');
 });
 
 test('rotated rectangles collide on their corners', () => {

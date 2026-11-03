@@ -9,6 +9,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 const MODELS = {
   'car-bmw': ['b53782a00cc240a191d5d7d005af1423', 0.15], // BMW M4 CSL (~1M triangles at full detail)
   'car-lambo': ['5884f95259ff411c95510cdde5ede33e', 0.5], // Lamborghini Veneno (~330k triangles)
+  'car-porsche': ['78d5c47ab2554c2592b7e499179a0792', 0.5], // Porsche 911 GT3 (~240k triangles)
+  'car-gtr': ['7b142ea3376e4811a326256c59bbc7a2', 0.5], // Nissan GT-R R35 (~280k triangles)
+  'car-mustang': ['0eaa7a16796540f29461ddae05ecdeb3', 0.4], // Ford Mustang Shelby GT500 (~350k triangles)
+  'car-f40': ['52a66c41cfcd4f999fb1b1c49bf24d70', 0.5], // Ferrari F40 (~245k triangles)
   traffic: '20f9af9b8a404d5cb022ac6fe87f21f5', // Generic passenger car pack
   van: '09d718c9cf72401b8534d265a06a803f', // Shvan '92
   truck: '3e8c5275aeab487fa37d227ce0bd1a9a', // Semi Truck Baked
