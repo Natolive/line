@@ -1,0 +1,34 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  game:
+    build: .
+    volumes:
+      - .:/app
+      - /app/node_modules # keep the container's Linux deps, not the host's
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.lane.rule=Host(`lane.localhost`)
+      - traefik.http.routers.lane.entrypoints=web
+      - traefik.http.services.lane.loadbalancer.server.port=5173
+
+  server:
+    build: .
+    command: ["node", "server/index.ts"]
+    volumes:
+      - .:/app
+      - /app/node_modules
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.lane-ws.rule=Host(`lane.localhost`) && PathPrefix(`/ws`)
+      - traefik.http.routers.lane-ws.entrypoints=web
+      - traefik.http.services.lane-ws.loadbalancer.server.port=8080

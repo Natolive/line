@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <title>Line</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,700;1,700&display=swap">
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="storm"></div>
+  <div id="hud" hidden>
+    <div class="hud-top">
+      <div>
+        <div class="score" id="score">0</div>
+        <div class="label"><span class="mult" id="mult" data-tier="1">×1</span> <span id="dist">0.0</span> km</div>
+      </div>
+      <div class="hud-right">
+        <div class="label">Best <span id="best-hud">0</span></div>
+        <button id="pause-btn" aria-label="Pause">❚❚</button>
+      </div>
+    </div>
+    <div id="popups"></div>
+    <div id="zone" aria-live="polite"></div>
+    <div id="countdown" hidden></div>
+    <div id="battle" class="battle" hidden>
+      <div><span class="label">Alive</span> <b id="b-alive">0/0</b></div>
+      <div><span class="label">Position</span> <b id="b-place">—</b></div>
+      <div><span class="label">Ping</span> <b id="b-ping">—</b></div>
+      <div class="storm-meter"><span class="label">Storm</span> <b id="b-wall">0 m</b><div class="track"><div id="b-wall-bar"></div></div></div>
+    </div>
+    <div class="dash">
+      <div class="gear" id="gear">1</div>
+      <div>
+        <div class="kmh"><span id="kmh">0</span><small>km/h</small></div>
+        <div class="rpm"><div id="rpm-bar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="screen loading" id="screen-loading">
+    <h1>Line</h1>
+    <div class="load-track"><div id="load-bar"></div></div>
+    <p class="label">Loading cars <span id="load-pct">0%</span></p>
+  </section>
+
+  <section class="screen menu" id="screen-menu" hidden>
+    <h1>Line</h1>
+    <p class="tagline">One motorway. No exit. Don't crash.</p>
+    <div class="garage">
+      <button class="arrow" id="car-prev" aria-label="Previous car">‹</button>
+      <div class="car-card">
+        <div class="car-name" id="car-name"></div>
+        <div class="label" id="car-year"></div>
+        <div class="car-spec" id="car-engine"></div>
+        <dl class="car-stats">
+          <div><dt>0–100 km/h</dt><dd id="car-accel"></dd></div>
+          <div><dt>Top speed</dt><dd id="car-top"></dd></div>
+          <div><dt>100–0 km/h</dt><dd id="car-brake"></dd></div>
+          <div><dt>Grip</dt><dd id="car-grip"></dd></div>
+        </dl>
+        <div class="car-spec muted" id="car-chassis"></div>
+      </div>
+      <button class="arrow" id="car-next" aria-label="Next car">›</button>
+    </div>
+    <p class="cta">Tap or press Space to drive</p>
+    <button class="text-btn" id="to-battle">Battle royale online (B)</button>
+    <p class="label">← → choose car · in the car: ↑ W gas · ↓ S brake · ← → A D steer</p>
+    <p class="label">Touch: hold left / right edge to steer, middle to brake</p>
+    <p class="best">Best <span id="best-menu">0</span></p>
+  </section>
+
+  <section class="screen" id="screen-mp" hidden>
+    <h2>Battle royale</h2>
+    <p class="tagline">Up to 16 drivers. A storm chases the pack and keeps speeding up. Last one on the road wins.</p>
+    <form id="mp-form" class="mp-form">
+      <label for="mp-name">Your name</label>
+      <input id="mp-name" maxlength="16" required autocomplete="nickname" pattern="[\p{L}\p{N} _.\-]{1,16}">
+      <label for="mp-room">Room code: share it with your friends</label>
+      <input id="mp-room" maxlength="6" minlength="4" required pattern="[A-Za-z0-9]{4,6}" autocapitalize="characters">
+      <button class="text-btn primary" type="submit">Join room</button>
+    </form>
+    <p class="error" id="mp-error" role="alert"></p>
+    <button class="text-btn" id="mp-back" type="button">Back (Esc)</button>
+  </section>
+
+  <section class="screen" id="screen-lobby" hidden>
+    <p class="label">Room code</p>
+    <h2 class="code" id="lobby-code"></h2>
+    <ul class="players" id="lobby-players"></ul>
+    <button class="text-btn primary" id="lobby-start">Start the race (Space)</button>
+    <p class="label" id="lobby-wait">Waiting for the host to start…</p>
+    <button class="text-btn" id="lobby-leave">Leave room (Esc)</button>
+  </section>
+
+  <section class="screen" id="screen-out" hidden>
+    <h2 class="danger" id="out-title">Wrecked</h2>
+    <div class="final" id="out-place"></div>
+    <p class="label">Watching the others…</p>
+  </section>
+
+  <section class="screen" id="screen-results" hidden>
+    <h2 id="results-title">Race over</h2>
+    <ol class="players ranking" id="results-list"></ol>
+    <p class="cta">Space: back to the lobby</p>
+    <button class="text-btn" id="results-leave">Leave room (Esc)</button>
+  </section>
+
+  <section class="screen" id="screen-pause" hidden>
+    <h2>Paused</h2>
+    <p class="cta">Tap or press Space to resume</p>
+  </section>
+
+  <section class="screen" id="screen-over" hidden>
+    <h2 class="danger">Crashed</h2>
+    <div class="final" id="final">0</div>
+    <p class="best" id="over-best"></p>
+    <p class="label" id="over-meta"></p>
+    <p class="cta">Tap or press Space to drive again</p>
+    <button class="text-btn" id="to-garage">Garage (Esc)</button>
+  </section>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

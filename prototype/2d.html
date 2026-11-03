@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Line</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e0f12;overflow:hidden;touch-action:none;user-select:none}
+  body{display:grid;place-items:center}
+  canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const W = 360, H = 640, LANES = [80, 180, 280], ROAD_L = 30, ROAD_R = 330;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+
+function resize() {
+  const s = Math.min(innerWidth / W, innerHeight / H), d = devicePixelRatio || 1;
+  cv.style.width = W * s + 'px'; cv.style.height = H * s + 'px';
+  cv.width = W * s * d; cv.height = H * s * d;
+  ctx.setTransform(s * d, 0, 0, s * d, 0, 0);
+}
+addEventListener('resize', resize); resize();
+
+// ---------- state ----------
+let best = 0; try { best = +localStorage.getItem('line-best') || 0 } catch {}
+let state = 'menu', muted = false, newBest = false, ac;
+let player, obs, coins, parts, speed, dist, score, coinCount, spawnIn, roadOff, shake, crashT, time, lastFree;
+
+function reset() {
+  player = { lane: 1, x: LANES[1], y: 540, w: 44, h: 76, tilt: 0 };
+  obs = []; coins = []; parts = [];
+  speed = 320; dist = 0; score = 0; coinCount = 0; spawnIn = 300;
+  roadOff = 0; shake = 0; crashT = 0; time = 0; lastFree = [0, 1, 2]; newBest = false;
+}
+reset();
+
+// ---------- audio ----------
+function beep(f, d, type = 'square', vol = .06, slide = 0) {
+  if (muted) return;
+  try {
+    ac = ac || new AudioContext();
+    const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.001, t + d);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + d);
+  } catch {}
+}
+
+// ---------- spawning ----------
+// Keeps one lane from the previous row's free lanes open, so there is always a path.
+function pickRow(prevFree, k) {
+  const safe = prevFree[Math.random() * prevFree.length | 0];
+  const others = [0, 1, 2].filter(l => l !== safe).sort(() => Math.random() - .5);
+  return { safe, blocked: others.slice(0, k) };
+}
+
+const COLORS = ['#ff5a5f', '#ffb400', '#8c6cff', '#3ddc84', '#f0f0f0', '#ff7ac6'];
+function spawnRow() {
+  const k = Math.random() < Math.min(.2 + time * .012, .65) ? 2 : 1;
+  const { safe, blocked } = pickRow(lastFree, k);
+  for (const l of blocked) {
+    const truck = Math.random() < .2;
+    obs.push({ x: LANES[l], y: -120, w: truck ? 50 : 44, h: truck ? 112 : 76, color: COLORS[Math.random() * COLORS.length | 0], truck });
+  }
+  if (Math.random() < .45) coins.push({ x: LANES[safe], y: -120, r: 11 });
+  lastFree = [0, 1, 2].filter(l => !blocked.includes(l));
+}
+
+// ---------- input ----------
+function move(dir) {
+  if (state !== 'play') return;
+  const n = player.lane + dir;
+  if (n < 0 || n > 2) return;
+  player.lane = n; beep(260 + n * 60, .05, 'triangle', .05);
+}
+function action() {
+  if (state === 'menu' || state === 'over') { reset(); state = 'play'; beep(520, .12, 'square', .06, 880) }
+  else if (state === 'pause') state = 'play';
+}
+function togglePause() {
+  if (state === 'play') state = 'pause'; else if (state === 'pause') state = 'play';
+}
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (k === 'arrowleft' || k === 'a' || k === 'q') move(-1);
+  else if (k === 'arrowright' || k === 'd') move(1);
+  else if (k === ' ' || k === 'enter') { e.preventDefault(); action() }
+  else if (k === 'p' || k === 'escape') togglePause();
+  else if (k === 'm') muted = !muted;
+});
+cv.addEventListener('pointerdown', e => {
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+  if (state === 'play' && x > W - 50 && y < 50) return togglePause();
+  if (state === 'play') move(x < W / 2 ? -1 : 1); else action();
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'play') state = 'pause' });
+
+// ---------- update ----------
+function hit(a, b, m = 6) {
+  return Math.abs(a.x - b.x) * 2 < a.w + b.w - m * 2 && Math.abs(a.y - b.y) * 2 < a.h + b.h - m * 2;
+}
+function burst(x, y, n, colors, spd) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = Math.random() * spd;
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: .5 + Math.random() * .6, color: colors[i % colors.length], s: 2 + Math.random() * 4 });
+  }
+}
+
+function update(dt) {
+  for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; p.life -= dt }
+  parts = parts.filter(p => p.life > 0);
+  shake = Math.max(0, shake - dt * 30);
+
+  if (state === 'menu') { roadOff = (roadOff + 150 * dt) % 80; return }
+  if (state === 'crash') {
+    crashT -= dt;
+    if (crashT <= 0) {
+      state = 'over';
+      if (score > best) { best = score; newBest = true; try { localStorage.setItem('line-best', best) } catch {} }
+    }
+    return;
+  }
+  if (state !== 'play') return;
+
+  time += dt;
+  speed = Math.min(950, 320 + time * 9);
+  const dy = speed * dt;
+  dist += dy; roadOff = (roadOff + dy) % 80;
+
+  spawnIn -= dy;
+  if (spawnIn <= 0) { spawnRow(); spawnIn += Math.max(220, 400 - time * 2.5) }
+
+  const tx = LANES[player.lane], prevX = player.x;
+  player.x += (tx - player.x) * Math.min(1, dt * 18);
+  player.tilt = (player.x - prevX) / dt * .0006;
+
+  for (const o of obs) o.y += dy;
+  for (const c of coins) c.y += dy;
+  obs = obs.filter(o => o.y < H + 120);
+
+  coins = coins.filter(c => {
+    if (c.y > H + 40) return false;
+    if (hit(player, { x: c.x, y: c.y, w: c.r * 2, h: c.r * 2 }, 0)) {
+      coinCount++; beep(990, .08, 'square', .05, 1480); burst(c.x, c.y, 10, ['#ffd84a', '#fff3a0'], 140);
+      return false;
+    }
+    return true;
+  });
+
+  score = Math.floor(dist / 10) + coinCount * 25;
+
+  for (const o of obs) if (hit(player, o)) {
+    state = 'crash'; crashT = 1; shake = 14;
+    burst(player.x, player.y - 20, 40, ['#4cf', '#fff', '#ff8a3d', '#ffd84a'], 320);
+    beep(180, .5, 'sawtooth', .1, 40);
+    break;
+  }
+}
+
+// ---------- draw ----------
+function drawCar(x, y, w, h, color, tilt = 0, truck = false) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.roundRect(-w / 2 + 4, -h / 2 + 6, w, h, 9); ctx.fill();
+  ctx.fillStyle = '#111';
+  for (const sy of truck ? [-h / 2 + 16, h / 2 - 22, h / 2 - 40] : [-h / 2 + 14, h / 2 - 24])
+    for (const sx of [-w / 2 - 3, w / 2 - 4]) ctx.fillRect(sx, sy, 7, 14);
+  ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, 9); ctx.fill();
+  ctx.fillStyle = 'rgba(10,20,35,.85)';
+  if (truck) { ctx.fillRect(-w / 2 + 6, -h / 2 + 8, w - 12, 14); ctx.fillStyle = 'rgba(0,0,0,.15)'; ctx.fillRect(-w / 2 + 4, -h / 2 + 30, w - 8, h - 36) }
+  else {
+    ctx.beginPath(); ctx.roundRect(-w / 2 + 6, -h / 2 + 16, w - 12, 14, 4); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(-w / 2 + 7, h / 2 - 22, w - 14, 10, 3); ctx.fill();
+  }
+  ctx.fillStyle = '#fff6b0'; ctx.fillRect(-w / 2 + 5, -h / 2 + 2, 8, 4); ctx.fillRect(w / 2 - 13, -h / 2 + 2, 8, 4);
+  ctx.fillStyle = '#ff3040'; ctx.fillRect(-w / 2 + 5, h / 2 - 5, 8, 3); ctx.fillRect(w / 2 - 13, h / 2 - 5, 8, 3);
+  ctx.restore();
+}
+
+function text(s, x, y, size, color = '#fff', align = 'center') {
+  ctx.font = `800 ${size}px system-ui, -apple-system, sans-serif`;
+  ctx.textAlign = align; ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+
+function overlay(lines) {
+  ctx.fillStyle = 'rgba(8,10,14,.72)'; ctx.fillRect(0, 0, W, H);
+  for (const [s, y, size, color] of lines) text(s, W / 2, y, size, color);
+}
+
+function draw() {
+  ctx.save();
+  if (shake) ctx.translate((Math.random() - .5) * shake, (Math.random() - .5) * shake);
+
+  // grass + road
+  ctx.fillStyle = '#1d3b2a'; ctx.fillRect(-20, -20, W + 40, H + 40);
+  ctx.fillStyle = '#2a2c33'; ctx.fillRect(ROAD_L, -20, ROAD_R - ROAD_L, H + 40);
+  for (let y = -80 + roadOff; y < H; y += 40) {
+    ctx.fillStyle = (Math.floor((y - roadOff) / 40) & 1) ? '#e8e8e8' : '#e0413a';
+    ctx.fillRect(ROAD_L - 8, y, 8, 40); ctx.fillRect(ROAD_R, y, 8, 40);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  for (let y = -80 + roadOff; y < H; y += 80) { ctx.fillRect(127, y, 6, 40); ctx.fillRect(227, y, 6, 40) }
+
+  // coins
+  for (const c of coins) {
+    const sx = Math.abs(Math.cos(time * 5 + c.x));
+    ctx.fillStyle = '#ffd84a'; ctx.beginPath(); ctx.ellipse(c.x, c.y, c.r * Math.max(.2, sx), c.r, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff3a0'; ctx.beginPath(); ctx.ellipse(c.x - 2 * sx, c.y - 2, c.r * .35 * Math.max(.2, sx), c.r * .5, 0, 0, 7); ctx.fill();
+  }
+
+  for (const o of obs) drawCar(o.x, o.y, o.w, o.h, o.color, 0, o.truck);
+  if (state !== 'crash' && state !== 'over') drawCar(player.x, player.y, player.w, player.h, '#4cf', player.tilt);
+
+  for (const p of parts) { ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.s, p.s) }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  // HUD
+  if (state !== 'menu') {
+    ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.beginPath(); ctx.roundRect(10, 10, 150, 52, 10); ctx.fill();
+    text(score, 22, 40, 24, '#fff', 'left');
+    text(`${Math.round(speed / 4)} km/h · ●${coinCount}`, 22, 56, 11, '#9fb3c8', 'left');
+    text(`BEST ${best}`, W - 56, 30, 12, '#9fb3c8', 'right');
+    if (state === 'play') { ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillRect(W - 36, 18, 5, 18); ctx.fillRect(W - 27, 18, 5, 18) }
+  }
+
+  if (state === 'menu') overlay([
+    ['LINE', 230, 72, '#4cf'],
+    ['Stay alive. Don\'t crash.', 270, 16, '#cfd8e3'],
+    ['TAP or SPACE to start', 380, 20, '#fff'],
+    ['← → / A D  ·  tap left / right side', 430, 13, '#9fb3c8'],
+    ['P pause  ·  M mute', 452, 13, '#9fb3c8'],
+    [best ? `BEST ${best}` : '', 520, 16, '#ffd84a'],
+  ]);
+  else if (state === 'pause') overlay([['PAUSED', 300, 40, '#fff'], ['TAP or SPACE to resume', 345, 16, '#9fb3c8']]);
+  else if (state === 'over') overlay([
+    ['CRASHED', 220, 44, '#ff5a5f'],
+    [score, 300, 64, '#fff'],
+    [newBest ? 'NEW BEST!' : `BEST ${best}`, 340, 18, '#ffd84a'],
+    [`${coinCount} coins · ${Math.round(time)}s`, 372, 14, '#9fb3c8'],
+    ['TAP or SPACE to retry', 450, 18, '#fff'],
+  ]);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now;
+  update(dt); draw(); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ponytail: self-check for the fairness rule, open index.html#test and read the console
+if (location.hash === '#test') {
+  let free = [0, 1, 2];
+  for (let i = 0; i < 1e4; i++) {
+    const { blocked } = pickRow(free, 1 + (i & 1));
+    console.assert(blocked.length < 3 && free.some(l => !blocked.includes(l)), 'unfair row', free, blocked);
+    free = [0, 1, 2].filter(l => !blocked.includes(l));
+  }
+  console.log('fairness check done');
+}
+</script>
+</body>
+</html>

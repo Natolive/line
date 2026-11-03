@@ -1,0 +1,37 @@
+// Messages between the game and the server (server/index.ts). Shared by both, so they can't drift apart.
+// Rare control messages are JSON (below); cars and traffic go as binary frames (codec.ts).
+// Positions are along the road: `d` = meters from the start line, `x` = lateral (+ = right).
+
+export type PlayerInfo = { id: string; name: string; car: string };
+
+/** A player's car, sent 30 times a second by its own game (binary, see codec.ts). */
+export type CarState = {
+  d: number;
+  x: number;
+  heading: number;
+  speed: number;
+  steer: number;
+  brake: boolean;
+  score: number;
+};
+
+/** One traffic car, as simulated by the room host. */
+export type TrafficCar = { id: number; model: number; heavy: boolean; d: number; x: number; speed: number; brake: boolean; blink: -1 | 0 | 1; yaw: number };
+
+export type ClientMessage =
+  | { t: 'join'; room: string; name: string; car: string }
+  | { t: 'car'; car: string } // changed car in the lobby
+  | { t: 'start' } // host only
+  | { t: 'out'; reason: 'crash' | 'wall'; d: number } // I'm eliminated
+  | { t: 'ping'; c: number }; // client clock (ms), for round trip and clock sync
+
+export type ServerMessage =
+  | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean }
+  | { t: 'lobby'; host: string; players: PlayerInfo[] }
+  | { t: 'error'; message: string }
+  | { t: 'go'; startsIn: number; grid: string[] } // countdown in ms; grid = starting order, index = slot in snapshots
+  | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)
+  | { t: 'out'; id: string; reason: 'crash' | 'wall' | 'left'; place: number }
+  | { t: 'winner'; id: string | null; ranking: string[] }; // ranking: winner first
+
+export const MAX_PLAYERS = 16;
