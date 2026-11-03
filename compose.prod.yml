@@ -1,5 +1,5 @@
 # Production (server): started by /srv/line/deploy.sh after each push to main.
-# Caddy (separate stack, /srv/caddy) serves https://line.natolive.fr and reaches this container over the external
+# Caddy (separate stack, /srv/caddy) serves https://line.natolive.fr and http://<server IP>:8000 and reaches this container over the external
 # `proxy` network as `line-game` (service names are shared between projects on that network, hence the alias).
 # One container serves the built game and the multiplayer WebSocket (/ws) on port 3000.
 # `.env` next to this file (not versioned): IMAGE_TAG, written by deploy.sh.
