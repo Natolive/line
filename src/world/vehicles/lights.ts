@@ -75,8 +75,12 @@ function findTailLamps(body: THREE.Group, l: number, h: number) {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || Array.isArray(mesh.material) || !('emissive' in mesh.material)) return;
     const mat = mesh.material as THREE.MeshStandardMaterial;
-    const lightUnit = /brake|tail|stop|lamp|light|optic/i.test(`${mesh.name} ${mesh.parent?.name} ${mat.name}`);
-    const red = mat.color.r > 0.35 && mat.color.g < 0.2 && mat.color.b < 0.2;
+    const names = `${mesh.name} ${mesh.parent?.name} ${mat.name}`;
+    // "backlight" is car-maker speak for the rear window; a reverse light is white; paint is never a lamp
+    const lightUnit = /brake|tail|stop|lamp|light|optic/i.test(names) && !/backlight|reverse/i.test(names);
+    // bright enough (linear), and red in hue as seen (sRGB): orange paint (green ~40% of red) is not a lens (green ~0)
+    const c = mat.color.clone().convertLinearToSRGB();
+    const red = mat.color.r > 0.35 && c.g < c.r * 0.25 && c.b < c.r * 0.3 && !/paint/i.test(mat.name);
     // light units may be cut; a merely red part (paint can be red!) only counts if it sits entirely at the back
     if (lightUnit || (red && wholeRear(mesh))) candidates.push(mesh);
   });

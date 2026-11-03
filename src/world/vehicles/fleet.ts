@@ -19,6 +19,14 @@ const children = (scene: THREE.Object3D, container: string) => {
 };
 const plain = (name: string) => name.replace(/[^A-Za-z0-9]/g, ''); // GLTFLoader strips dots from node names
 
+/** Sets the colour (sRGB hex) of every material whose name matches `paint`; shared by all copies of the car. */
+function repaint(scene: THREE.Object3D, paint: RegExp, hex: number) {
+  scene.traverse((o) => {
+    const m = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+    if (m && !Array.isArray(m) && paint.test(m.name)) m.color.setHex(hex);
+  });
+}
+
 /**
  * Wheels for models that split them into tyre, rim, disc...: tyres go first (their size sets the wheel radius),
  * and every part that fits inside a tyre spins with it, except brake calipers, which don't turn.
@@ -42,7 +50,10 @@ const PLAYER_SPECS: Record<string, (scene: THREE.Object3D) => Spec> = {
       flipWinding: true,
     };
   },
-  'car-porsche': (s) => ({ ...tyred(children(s, 'GLTF_SceneRootNode'), (o) => /tyre/i.test(o.name)), forward: [0, 1], length: 4.573 }),
+  'car-porsche': (s) => {
+    repaint(s, /carpaint/i, 0xe9e8e3); // Carrara White instead of the model's orange
+    return { ...tyred(children(s, 'GLTF_SceneRootNode'), (o) => /tyre/i.test(o.name)), forward: [0, 1], length: 4.573 };
+  },
   'car-gtr': (s) => ({ ...tyred(children(s, 'RootNode'), (o) => /^3_Wheel(00[246])?$/.test(o.name)), forward: [0, 1], length: 4.71 }),
   'car-mustang': (s) => {
     const wheels = ['FtL', 'FtR', 'BkL', 'BkR'].map((w) => s.getObjectByName(`GT500Wheel${w}`)!); // under the rig, away from the body
