@@ -54,11 +54,13 @@ Night is one number (0..1) that drives lamps, lit windows, sign glow and headlig
 
 `src/net/protocol.ts` (JSON control messages) and `src/net/codec.ts` (binary cars and traffic) are the only contract between game and server: change a message there, both sides follow.
 
-Frequent data is binary and quantised (a car = 17 bytes); never send per-frame data as JSON.
+Frequent data is binary and quantised (a car = 19 bytes); never send per-frame data as JSON.
 
 The server ticks at 30 Hz and sends one snapshot of all cars per room per tick; it never relays car messages one by one.
 
-Remote cars and mirrored traffic are drawn `INTERP_DELAY` (100 ms) in the past via `net/interp.ts`; contact checks use their estimated current position (`Rival.now`), never the drawn one.
+Every car and traffic report carries the server-clock time its sender simulated it (clamped by the server); never time samples by arrival.
+
+Remote cars and mirrored traffic are drawn at least `INTERP_DELAY` (100 ms) in the past via `net/interp.ts`, more if reports arrive later (`adaptDelay` jitter buffer); contact checks use their estimated current position (`Rival.now`), never the drawn one.
 
 Times on the wire are server time (ms); convert with `Battle.serverNow()` (ping/pong clock sync).
 

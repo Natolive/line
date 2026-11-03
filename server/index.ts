@@ -7,7 +7,7 @@ import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
-import { BIN, isState, isTraffic } from '../src/net/codec.ts';
+import { BIN, isState, isTraffic, stateTime, trafficTime } from '../src/net/codec.ts';
 import type { ClientMessage, ServerMessage } from '../src/net/protocol.ts';
 import { Rooms, type Room } from './rooms.ts';
 
@@ -63,8 +63,8 @@ wss.on('connection', (ws, req) => {
     if (isBinary) {
       if (!room) return;
       const buf = new Uint8Array(raw as Buffer);
-      if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf, performance.now());
-      else if (isTraffic(buf)) room.relayTraffic(id, buf, performance.now());
+      if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf, stateTime(buf, performance.now()));
+      else if (isTraffic(buf)) room.relayTraffic(id, buf, trafficTime(buf, performance.now()));
       return;
     }
     let m: ClientMessage;

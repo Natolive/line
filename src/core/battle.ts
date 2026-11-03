@@ -3,7 +3,7 @@
 import type * as THREE from 'three';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
-import { INTERP_DELAY } from '../net/interp.ts';
+import { adaptDelay, INTERP_DELAY } from '../net/interp.ts';
 import type { CarState, PlayerInfo, ServerMessage } from '../net/protocol.ts';
 import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
@@ -11,7 +11,8 @@ import type { Traffic } from '../world/traffic.ts';
 import type { Fleet } from '../world/vehicles/fleet.ts';
 import { LANES } from './config.ts';
 
-const STATE_EVERY = 1 / 30, TRAFFIC_EVERY = 1 / 15; // seconds between network updates
+const STATE_EVERY = 1 / 30, TRAFFIC_EVERY = 1 / 30; // seconds between network updates
+const CLOCK_SLEW = 0.05; // the clock estimate catches up at most 5% faster or slower than real time: no visible jump
 const PING_EVERY = 1; // s; also keeps the clock in sync
 const ROW_GAP = 14; // meters between grid rows
 
@@ -41,10 +42,17 @@ export class Battle {
   private trafficT = 0;
   private pingT = 0;
   private grid: string[] = []; // slot → player id, for snapshots
-  private clockOffset = 0; // server clock − my clock (ms)
+  private clockOffset = 0; // server clock − my clock (ms), as used: eases toward clockTarget
+  private clockTarget = NaN; // latest measured offset (ms)
   private bestRtt = Infinity;
+  private delay = INTERP_DELAY; // ms: how far in the past rivals and mirrored traffic are drawn
+  private peak = 0; // ms: worst recent lateness of a report (see adaptDelay)
   /** Round trip to the server (ms), smoothed. */
   ping = 0;
+  /** For the HUD: render delay (ms) and how many times per second a rival had no report in hand (`gaps`). */
+  link = { delay: INTERP_DELAY, gaps: 0 };
+  private gaps = 0;
+  private gapsT = 0;
 
   private constructor(scene: THREE.Scene, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
     this.rivals = new Rivals(scene, fleet);
@@ -82,11 +90,24 @@ export class Battle {
     return performance.now() + this.clockOffset;
   }
 
-  /** Moves rivals and mirrored traffic: drawn INTERP_DELAY in the past, between real reports. */
+  /** Moves rivals and mirrored traffic: drawn a little in the past (adaptive delay), between real reports. */
   sync(dt: number, myD: number) {
+    ({ delay: this.delay, peak: this.peak } = adaptDelay(this.delay, this.peak, dt));
+    const step = dt * 1000 * CLOCK_SLEW;
+    if (!Number.isNaN(this.clockTarget)) this.clockOffset += Math.max(-step, Math.min(step, this.clockTarget - this.clockOffset));
     const now = this.serverNow();
-    this.traffic.netTime = now - INTERP_DELAY;
-    this.rivals.update(dt, myD, now - INTERP_DELAY, now);
+    this.traffic.netTime = now - this.delay;
+    this.gaps += this.rivals.update(dt, myD, now - this.delay, now);
+    this.gapsT += dt;
+    if (this.gapsT >= 1) {
+      this.link = { delay: this.delay, gaps: this.gaps / this.gapsT };
+      this.gaps = this.gapsT = 0;
+    }
+  }
+
+  /** A report simulated at server time `t` just arrived: how late it is feeds the jitter buffer. */
+  private arrived(t: number) {
+    this.peak = Math.max(this.peak, this.serverNow() - t);
   }
 
   nameOf(id: string) {
@@ -106,12 +127,12 @@ export class Battle {
     this.sendT -= dt;
     if (s && this.sendT <= 0) {
       this.sendT = Math.max(0, this.sendT + STATE_EVERY); // keeps an exact 30/s on average, whatever the frame rate
-      this.net.send(encodeState(s));
+      this.net.send(encodeState(s, this.serverNow()));
     }
     this.trafficT -= dt;
     if (this.isHost && this.trafficT <= 0) {
       this.trafficT = TRAFFIC_EVERY;
-      this.net.send(encodeTraffic(this.traffic.snapshot()));
+      this.net.send(encodeTraffic(this.traffic.snapshot(), this.serverNow()));
     }
     this.pingT -= dt;
     if (this.pingT <= 0) {
@@ -135,23 +156,28 @@ export class Battle {
       const snap = decodeSnapshot(buf);
       for (const c of snap.cars) {
         const id = this.grid[c.slot];
-        if (id && id !== this.me) this.rivals.setState(id, c.state, snap.time - c.age);
+        if (id && id !== this.me) {
+          this.rivals.setState(id, c.state, snap.time - c.age);
+          this.arrived(snap.time - c.age);
+        }
       }
     } else if (buf[0] === BIN.TRAFFIC && !this.isHost) {
       const t = decodeTraffic(buf);
       this.traffic.applySnapshot(t.cars, t.time);
+      this.arrived(t.time);
     }
   }
 
   /**
    * Clock sync, as games do it: the server time is ours + offset, measured on the fastest round trips
-   * (they're the least distorted by queues), and smoothed so it never jumps.
+   * (they're the least distorted by queues), and the clock used eases toward it (CLOCK_SLEW) so it never jumps.
    */
   private onPong(c: number, s: number) {
     const now = performance.now(), rtt = now - c, offset = s + rtt / 2 - now;
     this.ping = this.ping ? this.ping * 0.8 + rtt * 0.2 : rtt;
     if (rtt <= this.bestRtt * 1.25) {
-      this.clockOffset = this.bestRtt === Infinity ? offset : this.clockOffset * 0.7 + offset * 0.3;
+      if (this.bestRtt === Infinity) this.clockOffset = offset; // first measure: jump there, before the race
+      this.clockTarget = this.bestRtt === Infinity ? offset : this.clockTarget * 0.7 + offset * 0.3;
       this.bestRtt = Math.min(this.bestRtt, rtt);
     }
     this.bestRtt *= 1.02; // let it drift up, in case the route got slower for good

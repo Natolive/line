@@ -1,4 +1,6 @@
-// Binary encoding for the frequent messages (cars 30×/s, traffic 15×/s). JSON stays for rare control messages.
+// Binary encoding for the frequent messages. Each report carries the time its sender simulated it:
+// timing samples by arrival would bake the network jitter into the motion.
+// (cars 30×/s, traffic 15×/s). JSON stays for rare control messages.
 // Values are quantised to what the game can show: x to the centimetre, speed to the cm/s, angles to 0.1 mrad.
 import type { CarState, TrafficCar } from './protocol.ts';
 
@@ -30,13 +32,25 @@ function readState(v: DataView, o: number): CarState {
   };
 }
 
-/** Client → server: my car. */
-export function encodeState(s: CarState) {
-  const buf = new Uint8Array(1 + STATE_BYTES), v = new DataView(buf.buffer);
+/** Client → server: my car, stamped with the server time (ms) of the frame it was simulated in, modulo 65536. */
+export function encodeState(s: CarState, time = 0) {
+  const buf = new Uint8Array(3 + STATE_BYTES), v = new DataView(buf.buffer);
   v.setUint8(0, BIN.STATE);
   writeState(v, 1, s);
+  v.setUint16(1 + STATE_BYTES, Math.round(time) & 0xffff);
   return buf;
 }
+
+/** Server: when a state was simulated, from its stamp, trusted only within [now − MAX_AGE, now]. */
+const MAX_AGE = 200; // ms; plus a 33 ms tick wait, it still fits the snapshot's u8 age
+export function stateTime(buf: Uint8Array, now: number) {
+  const age = (Math.round(now) - new DataView(buf.buffer, buf.byteOffset).getUint16(1 + STATE_BYTES)) & 0xffff;
+  return now - (age > 0x8000 ? 0 : Math.min(age, MAX_AGE)); // a stamp from the future (clock error) counts as now
+}
+
+/** Server: the host's traffic time, trusted only within [now − MAX_AGE, now]. */
+export const trafficTime = (buf: Uint8Array, now: number) =>
+  Math.max(now - MAX_AGE, Math.min(now, new DataView(buf.buffer, buf.byteOffset).getFloat64(1) || now));
 
 export const decodeState = (buf: Uint8Array) => readState(new DataView(buf.buffer, buf.byteOffset, buf.byteLength), 1);
 
@@ -71,11 +85,11 @@ export function packSnapshot(time: number, cars: { slot: number; at: number; raw
 }
 
 /** Sizes the server accepts, so a malformed frame is dropped before it's read. */
-export const isState = (buf: Uint8Array) => buf.byteLength === 1 + STATE_BYTES && buf[0] === BIN.STATE;
+export const isState = (buf: Uint8Array) => buf.byteLength === 3 + STATE_BYTES && buf[0] === BIN.STATE;
 export const isTraffic = (buf: Uint8Array) =>
   buf[0] === BIN.TRAFFIC && buf.byteLength >= 11 && buf.byteLength <= 11 + 120 * TRAFFIC_BYTES && (buf.byteLength - 11) % TRAFFIC_BYTES === 0;
 
-/** Host → server → clients: the traffic. The server stamps its time into bytes 1-8 when relaying. */
+/** Host → server → clients: the traffic, with the host's server-clock time in bytes 1-8 (the server clamps it when relaying). */
 export function encodeTraffic(cars: TrafficCar[], time = 0) {
   const buf = new Uint8Array(11 + cars.length * TRAFFIC_BYTES), v = new DataView(buf.buffer);
   v.setUint8(0, BIN.TRAFFIC);

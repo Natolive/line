@@ -153,9 +153,9 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
 .battle b { font-size: 18px; font-variant-numeric: tabular-nums; }
 .storm-meter .track { height: 4px; margin-top: 4px; border-radius: 2px; background: rgb(255 90 95 / 0.35); overflow: hidden; }
 #b-wall-bar { height: 100%; width: 100%; background: var(--text); }
-#b-ping[data-level="good"] { color: #6fdc8c; }
-#b-ping[data-level="ok"] { color: var(--gold); }
-#b-ping[data-level="bad"] { color: var(--danger); }
+#b-ping[data-level="good"], #b-net[data-level="good"] { color: #6fdc8c; }
+#b-ping[data-level="ok"], #b-net[data-level="ok"] { color: var(--gold); }
+#b-ping[data-level="bad"], #b-net[data-level="bad"] { color: var(--danger); }
 #storm { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.3s; background: radial-gradient(ellipse at center, transparent 45%, rgb(200 20 30 / 0.85)); }
 #countdown {
   position: absolute;

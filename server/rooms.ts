@@ -64,13 +64,13 @@ export class Room {
     this.broadcast({ t: 'go', startsIn: COUNTDOWN_MS, grid });
   }
 
-  /** A player's car (raw binary, already size-checked), received at server time `now`: kept until the next tick. */
-  setState(id: string, raw: Uint8Array, now: number) {
+  /** A player's car (raw binary, already size-checked), simulated at server time `at` (see `stateTime`): kept until the next tick. */
+  setState(id: string, raw: Uint8Array, at: number) {
     const m = this.members.get(id);
-    if (this.racing && m?.alive) Object.assign(m, { latest: raw, at: now });
+    if (this.racing && m?.alive) Object.assign(m, { latest: raw, at });
   }
 
-  /** The host's traffic, relayed at once with the server time stamped in. */
+  /** The host's traffic, relayed at once with its (clamped) simulation time stamped in. */
   relayTraffic(id: string, raw: Uint8Array, now: number) {
     if (this.racing && id === this.host) this.broadcast(stampTraffic(raw, now), id);
   }

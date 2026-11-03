@@ -96,11 +96,13 @@ export class Rivals {
 
   /**
    * Draws each rival as it was at server time `renderT` (between two real reports: smooth), and estimates
-   * where it is at `nowT` for contact checks. Placed relative to `myD`.
+   * where it is at `nowT` for contact checks. Placed relative to `myD`. Returns how many had no report in hand.
    */
   update(dt: number, myD: number, renderT: number, nowT: number) {
+    let gaps = 0; // rivals drawn past their newest report (extrapolated, a snap will follow)
     for (const r of this.all.values()) {
       const s = r.alive ? sampleAt(r.samples, renderT) : null;
+      if (s && renderT > r.samples[r.samples.length - 1].t) gaps++;
       if (s) {
         Object.assign(r, { d: s.d, x: s.x, heading: s.heading, speed: s.speed });
         const n = sampleAt(r.samples, nowT)!;
@@ -111,6 +113,7 @@ export class Rivals {
       r.v.mesh.position.set(r.x, 0, myD - r.d);
       r.v.mesh.rotation.y = -r.heading;
     }
+    return gaps;
   }
 
   /** Rivals still racing, where they are now (not where they're drawn): for traffic and collisions. */
