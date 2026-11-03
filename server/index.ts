@@ -1,5 +1,5 @@
 // Multiplayer server: WebSocket rooms. Control messages are JSON; cars and traffic are binary, and cars go
-// out as one 30 Hz snapshot per room (server tick). Run: npm run server
+// out as one snapshot per room per tick (NET_HZ) per room (server tick). Run: npm run server
 // In production (STATIC_DIR set) it also serves the built game, so one container is the whole site.
 import { randomUUID } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
@@ -8,12 +8,14 @@ import { extname, join, resolve, sep } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer } from 'ws';
 import { BIN, isState, isTraffic, stateTime, trafficTime } from '../src/net/codec.ts';
-import type { ClientMessage, ServerMessage } from '../src/net/protocol.ts';
+import { NET_HZ, type ClientMessage, type ServerMessage } from '../src/net/protocol.ts';
 import { Rooms, type Room } from './rooms.ts';
+import { Rtc } from './rtc.ts';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const STATIC_DIR = process.env.STATIC_DIR ? resolve(process.env.STATIC_DIR) : null;
-const TICK_HZ = 30;
+const TICK_HZ = NET_HZ;
+const BACKLOG = 16 * 1024; // bytes waiting on a socket past which binary frames are dropped (a congested link only gets later)
 const rooms = new Rooms();
 
 const TYPES: Record<string, string> = {
@@ -55,18 +57,23 @@ wss.on('connection', (ws, req) => {
   req.socket.setNoDelay(true); // send small frames immediately (no Nagle batching)
   const id = randomUUID().slice(0, 8);
   let room: Room | null = null;
-  const send = (m: ServerMessage | Uint8Array) => {
-    if (ws.readyState === ws.OPEN) ws.send(m instanceof Uint8Array ? m : JSON.stringify(m));
+  const signal = (m: ServerMessage) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
   };
+  // cars and traffic: over UDP when it's up (server/rtc.ts); over TCP they're dropped while the socket is backed up, not queued
+  const send = (m: ServerMessage | Uint8Array) => {
+    if (!(m instanceof Uint8Array)) return signal(m);
+    if (!rtc.send(m) && ws.readyState === ws.OPEN && ws.bufferedAmount < BACKLOG) ws.send(m);
+  };
+  const binary = (buf: Uint8Array) => {
+    if (!room) return;
+    if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf, stateTime(buf, performance.now()));
+    else if (isTraffic(buf)) room.relayTraffic(id, buf, trafficTime(buf, performance.now()));
+  };
+  const rtc = new Rtc(signal, binary);
 
   ws.on('message', (raw, isBinary) => {
-    if (isBinary) {
-      if (!room) return;
-      const buf = new Uint8Array(raw as Buffer);
-      if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf, stateTime(buf, performance.now()));
-      else if (isTraffic(buf)) room.relayTraffic(id, buf, trafficTime(buf, performance.now()));
-      return;
-    }
+    if (isBinary) return binary(new Uint8Array(raw as Buffer));
     let m: ClientMessage;
     try {
       m = JSON.parse(String(raw));
@@ -74,6 +81,8 @@ wss.on('connection', (ws, req) => {
       return;
     }
     if (m.t === 'ping') return send({ t: 'pong', c: Number(m.c) || 0, s: performance.now() });
+    if (m.t === 'rtc') return typeof m.sdp === 'string' && m.sdp.length < 16_000 && rtc.offer(m.sdp);
+    if (m.t === 'ice') return typeof m.c === 'string' && m.c.length < 512 && typeof m.mid === 'string' && m.mid.length < 32 && rtc.candidate(m.c, m.mid);
     if (m.t === 'join' && !room) {
       const code = clean(m.room?.toUpperCase(), 6, /^[A-Z0-9]{4,6}$/);
       const name = clean(m.name, 16, /^[\p{L}\p{N} _.-]{1,16}$/u);
@@ -97,7 +106,10 @@ wss.on('connection', (ws, req) => {
     else if (m.t === 'out') room.eliminate(id, m.reason === 'wall' ? 'wall' : 'crash');
   });
 
-  ws.on('close', () => room && rooms.leave(room, id));
+  ws.on('close', () => {
+    rtc.close();
+    if (room) rooms.leave(room, id);
+  });
 });
 
 setInterval(() => rooms.tick(performance.now()), 1000 / TICK_HZ);

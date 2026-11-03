@@ -11,6 +11,9 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      PUBLIC_IP: 57.129.174.3 # cars and traffic over UDP (WebRTC, server/rtc.ts): the address browsers reach, on the published port
+    ports:
+      - "40000:40000/udp" # straight to the container: Caddy only proxies HTTP; open it in the server's firewall too
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
       interval: 10s

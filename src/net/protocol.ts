@@ -7,7 +7,7 @@ export type PlayerInfo = { id: string; name: string; car: string };
 /** A line of the final ranking: how far each driver got (m along the road) and how they went out (null: still racing, the winner). */
 export type Result = { id: string; name: string; out: 'crash' | 'wall' | 'left' | null; d: number };
 
-/** A player's car, sent 30 times a second by its own game (binary, see codec.ts). */
+/** A player's car, sent NET_HZ times a second by its own game (binary, see codec.ts). */
 export type CarState = {
   d: number;
   x: number;
@@ -27,7 +27,11 @@ export type ClientMessage =
   | { t: 'spec'; car: string | null } // host only, in the lobby: everyone drives with this garage car's figures (id), or each their own (null)
   | { t: 'start' } // host only
   | { t: 'out'; reason: 'crash' | 'wall'; d: number } // I'm eliminated
-  | { t: 'ping'; c: number }; // client clock (ms), for round trip and clock sync
+  | { t: 'ping'; c: number } // client clock (ms), for round trip and clock sync
+  | Rtc;
+
+/** WebRTC set-up, both ways: the game offers a UDP channel for the binary frames, the server answers (server/rtc.ts). */
+type Rtc = { t: 'rtc'; sdp: string } | { t: 'ice'; c: string; mid: string };
 
 export type ServerMessage =
   | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean; spec: string | null }
@@ -36,6 +40,10 @@ export type ServerMessage =
   | { t: 'go'; startsIn: number; grid: string[] } // countdown in ms; grid = starting order, index = slot in snapshots
   | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)
   | { t: 'out'; id: string; reason: 'crash' | 'wall' | 'left'; place: number }
-  | { t: 'winner'; id: string | null; ranking: Result[] }; // ranking: winner first
+  | { t: 'winner'; id: string | null; ranking: Result[] } // ranking: winner first
+  | Rtc;
 
 export const MAX_PLAYERS = 16;
+
+/** Hz: how often each game sends its car and the server sends a snapshot. 60 halves the latency and the guess of 30, for ~20 KB/s per player. */
+export const NET_HZ = 60;

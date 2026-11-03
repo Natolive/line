@@ -3,16 +3,18 @@
 import type * as THREE from 'three';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
-import type { CarState, PlayerInfo, Result, ServerMessage } from '../net/protocol.ts';
+import { due } from '../net/interp.ts';
+import { NET_HZ, type CarState, type PlayerInfo, type Result, type ServerMessage } from '../net/protocol.ts';
 import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
 import type { Traffic } from '../world/traffic.ts';
 import type { Fleet } from '../world/vehicles/fleet.ts';
 import { LANES } from './config.ts';
 
-const STATE_EVERY = 1 / 30, TRAFFIC_EVERY = 1 / 30; // seconds between network updates
+const STATE_EVERY = 1 / NET_HZ, TRAFFIC_EVERY = 1 / 30; // seconds between network updates (traffic is steady: 30 is plenty)
 const CLOCK_SLEW = 0.05; // the clock estimate catches up at most 5% faster or slower than real time: no visible jump
 const PING_EVERY = 1; // s; also keeps the clock in sync
+const PING_BURST = { count: 10, every: 0.1 }; // the first pings come fast, so the clock is settled before the lights go green
 const ROW_GAP = 14; // meters between grid rows
 
 export type BattleEvents = {
@@ -38,13 +40,22 @@ export class Battle {
   private traffic: Traffic;
   private events: BattleEvents;
   private startAt = Infinity; // performance.now() when the lights go green
-  private sendT = 0;
-  private trafficT = 0;
+  private sendT = { t: 0 };
+  private trafficT = { t: 0 };
   private pingT = 0;
+  private pings = 0;
+  private trafficAt = -Infinity; // server time of the newest traffic report applied
+  /** performance.now() of the frame being simulated (the rAF timestamp): what my car's state and the drawn rivals correspond to. */
+  frameAt = performance.now();
   private grid: string[] = []; // slot → player id, for snapshots
   private clockOffset = 0; // server clock − my clock (ms), as used: eases toward clockTarget
   private clockTarget = NaN; // latest measured offset (ms)
   private bestRtt = Infinity;
+  /** True when cars and traffic travel over UDP (WebRTC), false on the WebSocket fallback. */
+  get udp() {
+    return this.net.udp;
+  }
+
   /** Round trip to the server (ms), smoothed. */
   ping = 0;
   /** For the HUD, over the last second of rival reports: how far ahead of them we predict (ms) and the average correction each brought (m). */
@@ -87,11 +98,16 @@ export class Battle {
     return performance.now() + this.clockOffset;
   }
 
+  /** The server time (ms) of the frame being simulated: not of the call, whose moment within the frame varies by a few ms. */
+  private frameNow() {
+    return this.frameAt + this.clockOffset;
+  }
+
   /** Moves rivals and mirrored traffic to where they are now, predicted from their reports (net/interp.ts). */
   sync(dt: number, myD: number) {
     const step = dt * 1000 * CLOCK_SLEW;
     if (!Number.isNaN(this.clockTarget)) this.clockOffset += Math.max(-step, Math.min(step, this.clockTarget - this.clockOffset));
-    const now = this.serverNow(), tl = this.tally;
+    const now = this.frameNow(), tl = this.tally;
     this.traffic.netNow = now;
     this.rivals.update(dt, myD, now);
     if ((tl.t += dt) >= 1) {
@@ -117,21 +133,13 @@ export class Battle {
     this.net.send({ t: 'start' });
   }
 
-  /** Publishes my car (30×/s, 17 bytes) and, as host, the traffic (15×/s); pings once a second. */
+  /** Publishes my car (NET_HZ, 19 bytes) and, as host, the traffic (30×/s), stamped with this frame's time; pings once a second. */
   publish(dt: number, s: CarState | null) {
-    this.sendT -= dt;
-    if (s && this.sendT <= 0) {
-      this.sendT = Math.max(0, this.sendT + STATE_EVERY); // keeps an exact 30/s on average, whatever the frame rate
-      this.net.send(encodeState(s, this.serverNow()));
-    }
-    this.trafficT -= dt;
-    if (this.isHost && this.trafficT <= 0) {
-      this.trafficT = TRAFFIC_EVERY;
-      this.net.send(encodeTraffic(this.traffic.snapshot(), this.serverNow()));
-    }
+    if (due(this.sendT, dt, STATE_EVERY) && s) this.net.send(encodeState(s, this.frameNow()));
+    if (due(this.trafficT, dt, TRAFFIC_EVERY) && this.isHost) this.net.send(encodeTraffic(this.traffic.snapshot(), this.frameNow()));
     this.pingT -= dt;
     if (this.pingT <= 0) {
-      this.pingT = PING_EVERY;
+      this.pingT = ++this.pings < PING_BURST.count ? PING_BURST.every : PING_EVERY;
       this.net.send({ t: 'ping', c: performance.now() });
     }
   }
@@ -159,6 +167,8 @@ export class Battle {
       }
     } else if (buf[0] === BIN.TRAFFIC && !this.isHost) {
       const t = decodeTraffic(buf);
+      if (t.time <= this.trafficAt) return; // older than the last one applied: arrived out of order (UDP); it would bring back gone cars
+      this.trafficAt = t.time;
       this.traffic.applySnapshot(t.cars, t.time, this.serverNow());
     }
   }

@@ -24,6 +24,11 @@ services:
   server:
     build: { context: ., target: dev }
     command: ["node", "server/index.ts"]
+    # cars and traffic over UDP (WebRTC, server/rtc.ts): one port, announced on the address the browser reaches
+    environment:
+      PUBLIC_IP: 127.0.0.1
+    ports:
+      - "40000:40000/udp"
     volumes:
       - .:/app
       - /app/node_modules

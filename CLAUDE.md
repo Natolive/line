@@ -56,9 +56,11 @@ Night is one number (0..1) that drives lamps, lit windows, sign glow and headlig
 
 Frequent data is binary and quantised (a car = 19 bytes); never send per-frame data as JSON.
 
-The server ticks at 30 Hz and sends one snapshot of all cars per room per tick; it never relays car messages one by one.
+Binary frames go over UDP (a WebRTC data channel, unordered and never retransmitted: `net/client.ts`, `server/rtc.ts`), falling back to the WebSocket; so any frame may be lost, late or out of order, and receivers drop the older ones. A backed-up link drops frames, never queues them. Control messages stay on the WebSocket.
 
-Every car and traffic report carries the server-clock time its sender simulated it (clamped by the server); never time samples by arrival.
+The server ticks at `NET_HZ` (60 Hz, `net/protocol.ts`) and sends one snapshot of all cars per room per tick; it never relays car messages one by one.
+
+Every car and traffic report carries the server-clock time of the frame its sender simulated it in (the rAF timestamp, not the send time) (clamped by the server); never time samples by arrival.
 
 Remote cars and mirrored traffic are drawn where they are now, predicted from their newest report (dead reckoning in `net/interp.ts`); a report that disagrees becomes a correction that fades out (`addReport`/`present`), never a snap. Contacts use the drawn position: what you see is what you hit.
 

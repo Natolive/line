@@ -119,6 +119,7 @@ export class Game {
         frames = 0;
         fpsAt = now;
       }
+      if (this.battle) this.battle.frameAt = now;
       this.update(dt);
       this.applyTheme();
       this.stage.render(this.fx.shake);
@@ -212,7 +213,7 @@ export class Game {
           const spec = specCar(this.battle!.spec);
           this.startRace(slot.d, slot.x, spec);
           if (spec) this.hud.popup(`Everyone drives with ${spec.name} figures`);
-          this.hud.setBattle({ alive: this.battle!.players.length, total: this.battle!.players.length, wall: this.dist - this.battle!.wall(), place: 0, ping: this.battle!.ping, ...this.battle!.link });
+          this.hud.setBattle({ alive: this.battle!.players.length, total: this.battle!.players.length, wall: this.dist - this.battle!.wall(), place: 0, ping: this.battle!.ping, udp: this.battle!.udp, ...this.battle!.link });
           this.setState('countdown');
         },
         out: (id, reason, place) => {
@@ -423,7 +424,7 @@ export class Game {
     const b = this.battle!, rivals = [...b.rivals.all.values()];
     const alive = rivals.filter((r) => r.alive).length + (this.state === 'play' ? 1 : 0);
     const place = 1 + rivals.filter((r) => r.alive && r.d > this.dist).length;
-    return { alive, total: rivals.length + 1, wall: this.dist - b.wall(), place: this.state === 'play' ? place : 0, ping: b.ping, ...b.link };
+    return { alive, total: rivals.length + 1, wall: this.dist - b.wall(), place: this.state === 'play' ? place : 0, ping: b.ping, udp: b.udp, ...b.link };
   }
 
   private puff(at: THREE.Vector3, color: number, size: number, grow: number, life: number, alpha: number) {

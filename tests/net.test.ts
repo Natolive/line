@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeSnapshot, decodeState, decodeTraffic, encodeState, encodeTraffic, packSnapshot, stampTraffic, stateTime, trafficTime } from '../src/net/codec.ts';
-import { addReport, present, pushSample, sampleAt, track, type Sample } from '../src/net/interp.ts';
+import { addReport, due, present, pushSample, sampleAt, track, type Sample } from '../src/net/interp.ts';
 import type { CarState, TrafficCar } from '../src/net/protocol.ts';
 
 const car: CarState = { d: 12345.678, x: -3.61, heading: 0.1234, speed: 83.27, steer: -0.21, brake: true, score: 987654 };
@@ -139,4 +139,18 @@ test('a teleport (crash, respawn) snaps instead of sliding across the road', () 
   addReport(tr, { t: 33, d: 1, x: 0, heading: 0, speed: 30, steer: 0 }, 40);
   addReport(tr, { t: 66, d: 1, x: 7, heading: 0, speed: 0, steer: 0 }, 70);
   assert.deepEqual(tr.err, { d: 0, x: 0, heading: 0 });
+});
+
+test('sending at a fixed rate keeps an even rhythm through frame jitter, and the right average', () => {
+  // a 60 Hz display with ±0.3 ms jitter, sending at 30 Hz: every second frame, never a 3-frame gap
+  const timer = { t: 0 }, sentOn: number[] = [];
+  for (let i = 0; i < 600; i++) if (due(timer, 1 / 60 + (i % 2 ? 0.0003 : -0.0003) * (i % 3 ? 1 : -1), 1 / 30)) sentOn.push(i);
+  const steady = sentOn.slice(1); // the first frame is overdue: one early send, then the rhythm
+  const gaps = new Set(steady.slice(1).map((f, i) => f - steady[i]));
+  assert.deepEqual([...gaps], [2]);
+  // 144 Hz sending at 60 Hz: 60 a second on average
+  const fast = { t: 0 };
+  let n = 0;
+  for (let i = 0; i < 1440; i++) if (due(fast, 1 / 144, 1 / 60)) n++;
+  close(n, 600, 2);
 });

@@ -74,6 +74,18 @@ export function sampleAt(samples: Sample[], t: number): Sample | null {
   return { ...samples[0], t };
 }
 
+/**
+ * Fixed-rate sending from a variable frame rate: counts `timer` (s) down by `dt` and says whether to send
+ * on this frame. Fires on the frame nearest the due time (not the first one past it): with a strict `<= 0`,
+ * frame jitter turns a 2-frame rhythm into 2-2-3-2, and the gaps show as stutter on the other side.
+ */
+export function due(timer: { t: number }, dt: number, every: number) {
+  timer.t -= dt;
+  if (timer.t > dt / 2) return false;
+  timer.t = Math.max(0, timer.t + every); // a stall doesn't cause a burst
+  return true;
+}
+
 /** Adds a sample in time order and forgets ones older than one second before it. False if it was dropped. */
 export function pushSample(samples: Sample[], s: Sample) {
   if (samples.length && s.t <= samples[samples.length - 1].t) return false; // duplicate or out of order

@@ -46,7 +46,7 @@ In the lobby, the host can put everyone on the same figures (power, weight, gear
 
 To try it alone, open the game in two browser windows and join the same room code.
 
-Netcode: binary messages (19 bytes per car, stamped with when the sender simulated it), a 30 Hz server tick sending one snapshot per room, other cars predicted to the present with smoothed corrections (as racing games do), and ping/pong clock sync; ping and prediction quality show in the race HUD.
+Netcode: binary messages (19 bytes per car, stamped with when the sender simulated it), cars and traffic over UDP (a WebRTC data channel, with the WebSocket as fallback), a 60 Hz server tick sending one snapshot per room, other cars predicted to the present with smoothed corrections (as racing games do), and ping/pong clock sync; ping and prediction quality show in the race HUD.
 
 ## Garage
 

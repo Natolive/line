@@ -100,3 +100,17 @@ test('the host can give everyone the same car figures between races; every playe
   r.setSpec('p0', null); // not during a race
   assert.equal(r.spec, 'bmw');
 });
+
+test('over UDP a late, older car report is dropped, by its own time stamp (even across the u16 wrap)', () => {
+  const { r, inbox } = room(2);
+  r.start('p0');
+  const s = (d: number, stamp: number) => encodeState({ d, x: 0, heading: 0, speed: 30, steer: 0, brake: false, score: 0 }, stamp);
+  r.setState('p1', s(20, 65_530), 4990);
+  r.setState('p1', s(10, 65_500), 4995); // simulated earlier, arrived later
+  r.setState('p1', s(20, 65_530), 4996); // the same report twice
+  r.tick(5000);
+  r.setState('p1', s(21, 10), 5010); // past the wrap: newer
+  r.tick(5017);
+  const ds = inbox.p0.filter((m): m is Uint8Array => m instanceof Uint8Array).map((b) => decodeSnapshot(b).cars[0].state.d);
+  assert.deepEqual(ds, [20, 21]);
+});

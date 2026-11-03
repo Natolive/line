@@ -3,7 +3,7 @@ import type { Car } from '../data/cars/index.ts';
 import type { PlayerInfo, Result as Standing } from '../net/protocol.ts';
 
 export type Screen = 'menu' | 'play' | 'pause' | 'over' | 'mp' | 'lobby' | 'countdown' | 'out' | 'results';
-export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; ahead: number; fix: number }; // ahead: ms rivals are predicted past their reports; fix: m each report corrects // wall: meters ahead of the storm
+export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; udp: boolean; ahead: number; fix: number }; // ahead: ms rivals are predicted past their reports; fix: m each report corrects // wall: meters ahead of the storm
 
 export type Stats = { score: number; kmh: number; gear: number; rev: number; km: number; mult: number }; // rev: 0..1 of redline
 export type Result = { score: number; best: number; isNew: boolean; km: number; nearMisses: number; seconds: number };
@@ -103,6 +103,9 @@ export class Hud {
     const ping = $('b-ping');
     ping.textContent = s.ping ? `${Math.round(s.ping)} ms` : '—';
     ping.dataset.level = s.ping < 80 ? 'good' : s.ping < 150 ? 'ok' : 'bad';
+    const link = $('b-link');
+    link.textContent = s.udp ? 'UDP' : 'TCP';
+    link.dataset.level = s.udp ? 'good' : 'ok';
     const net = $('b-net');
     net.textContent = s.ahead ? `${Math.round(s.ahead)} ms · ${Math.round(s.fix * 100)} cm` : '—';
     net.dataset.level = s.fix < 0.1 ? 'good' : s.fix < 0.5 ? 'ok' : 'bad';

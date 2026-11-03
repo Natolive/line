@@ -1,6 +1,6 @@
 // Binary encoding for the frequent messages. Each report carries the time its sender simulated it:
 // timing samples by arrival would bake the network jitter into the motion.
-// Cars and traffic go 30×/s; JSON stays for rare control messages.
+// Cars go NET_HZ (60)×/s, traffic 30×/s; JSON stays for rare control messages.
 // Values are quantised to what the game can show: x to the centimetre, speed to the cm/s, angles to 0.1 mrad.
 import type { CarState, TrafficCar } from './protocol.ts';
 
@@ -42,11 +42,19 @@ export function encodeState(s: CarState, time = 0) {
 }
 
 /** Server: when a state was simulated, from its stamp, trusted only within [now − MAX_AGE, now]. */
-const MAX_AGE = 200; // ms; plus a 33 ms tick wait, it still fits the snapshot's u8 age
+const MAX_AGE = 200; // ms; plus a 17 ms tick wait, it still fits the snapshot's u8 age
 export function stateTime(buf: Uint8Array, now: number) {
   const age = (Math.round(now) - new DataView(buf.buffer, buf.byteOffset).getUint16(1 + STATE_BYTES)) & 0xffff;
   return now - (age > 0x8000 ? 0 : Math.min(age, MAX_AGE)); // a stamp from the future (clock error) counts as now
 }
+
+/** Server: whether state `buf` was simulated after the one stamped `prev` (the sender's own u16 stamps, so clamping can't reorder them; wraps every 65.5 s). */
+export function newerState(buf: Uint8Array, prev: number | null) {
+  const stamp = new DataView(buf.buffer, buf.byteOffset).getUint16(1 + STATE_BYTES);
+  return prev === null || (((stamp - prev) & 0xffff) !== 0 && ((stamp - prev) & 0xffff) < 0x8000);
+}
+
+export const stateStamp = (buf: Uint8Array) => new DataView(buf.buffer, buf.byteOffset).getUint16(1 + STATE_BYTES);
 
 /** Server: the host's traffic time, trusted only within [now − MAX_AGE, now]. */
 export const trafficTime = (buf: Uint8Array, now: number) =>
