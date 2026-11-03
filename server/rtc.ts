@@ -3,12 +3,16 @@
 // gone, and the next one (17 ms later) replaces it. The WebSocket stays for control messages, signalling, and as
 // the fallback when UDP can't get through (strict firewall, no WebRTC).
 // One UDP port for every player (ICE mux). Behind Docker the server only sees its container address, so it
-// announces PUBLIC_IP instead, on the published port.
+// announces PUBLIC_IP instead, on each of PUBLIC_PORTS (all published to that one port): strict networks that
+// only let NTP (123) or SIP (5060) out still get through, and ICE keeps the first port in the list that answers.
 import { PeerConnection, type DataChannel } from 'node-datachannel';
 import type { ServerMessage } from '../src/net/protocol.ts';
 
 const PORT = Number(process.env.RTC_PORT ?? 40000);
 const PUBLIC_IP = process.env.PUBLIC_IP ?? ''; // empty: announce the real local addresses (no Docker)
+const PUBLIC_PORTS = (process.env.PUBLIC_PORTS ?? String(PORT)).split(',').map(Number).filter((p) => p > 0 && p < 65536); // most wanted first
+// host candidates, ranked by list order (RFC 8445 priority: type 126, local preference, component 1)
+const CANDIDATES = PUBLIC_PORTS.map((port, i) => `candidate:${i + 1} 1 UDP ${(126 << 24) + ((65535 - i) << 8) + 255} ${PUBLIC_IP} ${port} typ host`);
 const BACKLOG = 16 * 1024; // bytes: past this the link is congested; drop frames rather than queue them (the next one is fresher)
 
 export class Rtc {
@@ -30,7 +34,7 @@ export class Rtc {
     pc.onLocalDescription((answer) => {
       this.signal({ t: 'rtc', sdp: answer });
       // after the answer: a candidate before it is rejected. Behind NAT (the player's) only this one works: the game reaches us here.
-      if (PUBLIC_IP) this.signal({ t: 'ice', c: `candidate:1 1 UDP 2122317823 ${PUBLIC_IP} ${PORT} typ host`, mid });
+      if (PUBLIC_IP) for (const c of CANDIDATES) this.signal({ t: 'ice', c, mid });
     });
     pc.onLocalCandidate((c, mid) => {
       if (!PUBLIC_IP) this.signal({ t: 'ice', c, mid });
