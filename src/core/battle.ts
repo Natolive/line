@@ -135,7 +135,7 @@ export class Battle {
       const snap = decodeSnapshot(buf);
       for (const c of snap.cars) {
         const id = this.grid[c.slot];
-        if (id && id !== this.me) this.rivals.setState(id, c.state, snap.time);
+        if (id && id !== this.me) this.rivals.setState(id, c.state, snap.time - c.age);
       }
     } else if (buf[0] === BIN.TRAFFIC && !this.isHost) {
       const t = decodeTraffic(buf);

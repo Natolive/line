@@ -40,41 +40,32 @@ export function encodeState(s: CarState) {
 
 export const decodeState = (buf: Uint8Array) => readState(new DataView(buf.buffer, buf.byteOffset, buf.byteLength), 1);
 
-/** Server → clients: every player's latest car, stamped with the server time (ms). `slot` = grid position. */
-export function encodeSnapshot(time: number, cars: { slot: number; state: CarState }[]) {
-  const buf = new Uint8Array(10 + cars.length * (1 + STATE_BYTES)), v = new DataView(buf.buffer);
-  v.setUint8(0, BIN.SNAPSHOT);
-  v.setFloat64(1, time);
-  v.setUint8(9, cars.length);
-  cars.forEach((c, i) => {
-    const o = 10 + i * (1 + STATE_BYTES);
-    v.setUint8(o, c.slot);
-    writeState(v, o + 1, c.state);
-  });
-  return buf;
-}
+/** Server → clients: the cars received since the last tick, stamped with the server time (ms).
+ * Per car: `slot` = grid position, `age` = ms between receiving it and the snapshot (so its real time is time − age). */
+const CAR_BYTES = 2 + STATE_BYTES;
 
 export function decodeSnapshot(buf: Uint8Array) {
   const v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), n = v.getUint8(9);
   return {
     time: v.getFloat64(1),
     cars: Array.from({ length: n }, (_, i) => {
-      const o = 10 + i * (1 + STATE_BYTES);
-      return { slot: v.getUint8(o), state: readState(v, o + 1) };
+      const o = 10 + i * CAR_BYTES;
+      return { slot: v.getUint8(o), age: v.getUint8(o + 1), state: readState(v, o + 2) };
     }),
   };
 }
 
 /** Server: builds a snapshot by copying each player's raw state bytes (as received) without decoding them. */
-export function packSnapshot(time: number, cars: { slot: number; raw: Uint8Array }[]) {
-  const buf = new Uint8Array(10 + cars.length * (1 + STATE_BYTES)), v = new DataView(buf.buffer);
+export function packSnapshot(time: number, cars: { slot: number; at: number; raw: Uint8Array }[]) {
+  const buf = new Uint8Array(10 + cars.length * CAR_BYTES), v = new DataView(buf.buffer);
   v.setUint8(0, BIN.SNAPSHOT);
   v.setFloat64(1, time);
   v.setUint8(9, cars.length);
   cars.forEach((c, i) => {
-    const o = 10 + i * (1 + STATE_BYTES);
+    const o = 10 + i * CAR_BYTES;
     buf[o] = c.slot;
-    buf.set(c.raw.subarray(1, 1 + STATE_BYTES), o + 1);
+    buf[o + 1] = clampInt(time - c.at, 0, 255);
+    buf.set(c.raw.subarray(1, 1 + STATE_BYTES), o + 2);
   });
   return buf;
 }

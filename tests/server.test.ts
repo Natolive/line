@@ -55,8 +55,8 @@ test('each tick sends one snapshot with every racing car, by grid slot', () => {
   const { r, inbox } = room(3);
   r.start('p0');
   const grid = (inbox.p0.find((m) => !(m instanceof Uint8Array) && m.t === 'go') as { grid: string[] }).grid;
-  r.setState('p1', encodeState({ d: 42, x: 1.8, heading: 0, speed: 30, steer: 0, brake: false, score: 7 }));
-  r.setState('p2', encodeState({ d: 40, x: -1.8, heading: 0, speed: 31, steer: 0, brake: true, score: 9 }));
+  r.setState('p1', encodeState({ d: 42, x: 1.8, heading: 0, speed: 30, steer: 0, brake: false, score: 7 }), 4990);
+  r.setState('p2', encodeState({ d: 40, x: -1.8, heading: 0, speed: 31, steer: 0, brake: true, score: 9 }), 4980);
   r.tick(5000);
   const snaps = inbox.p0.filter((m): m is Uint8Array => m instanceof Uint8Array);
   assert.equal(snaps.length, 1, 'one message per tick, not one per player');
@@ -65,4 +65,15 @@ test('each tick sends one snapshot with every racing car, by grid slot', () => {
   const p1 = snap.cars.find((c) => c.slot === grid.indexOf('p1'))!;
   assert.equal(p1.state.d, 42);
   assert.equal(p1.state.score, 7);
+  assert.equal(p1.age, 10, 'stamped with when the server got it, not the tick');
+});
+
+test('a car is sent once: a tick with no new report does not repeat it under a new time', () => {
+  const { r, inbox } = room(2);
+  r.start('p0');
+  r.setState('p1', encodeState({ d: 42, x: 1.8, heading: 0, speed: 30, steer: 0, brake: false, score: 0 }), 4990);
+  r.tick(5000);
+  r.tick(5033); // p1's next report is late: nothing to send
+  const snaps = inbox.p0.filter((m): m is Uint8Array => m instanceof Uint8Array);
+  assert.equal(snaps.length, 1);
 });

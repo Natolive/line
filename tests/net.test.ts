@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeSnapshot, decodeState, decodeTraffic, encodeSnapshot, encodeState, encodeTraffic, stampTraffic } from '../src/net/codec.ts';
+import { decodeSnapshot, decodeState, decodeTraffic, encodeState, encodeTraffic, packSnapshot, stampTraffic } from '../src/net/codec.ts';
 import { pushSample, sampleAt, type Sample } from '../src/net/interp.ts';
 import type { CarState, TrafficCar } from '../src/net/protocol.ts';
 
@@ -20,10 +20,12 @@ test('a car survives the binary round trip at game precision, in 17 bytes', () =
   assert.ok(buf.byteLength * 8 < JSON.stringify(car).length * 8 / 5, 'at least 5x smaller than JSON');
 });
 
-test('a snapshot carries every player and the server time', () => {
-  const snap = decodeSnapshot(encodeSnapshot(1234.5, [{ slot: 0, state: car }, { slot: 7, state: { ...car, x: 1.8, brake: false } }]));
+test('a snapshot carries every player, the server time and how old each car is', () => {
+  const cars = [{ slot: 0, at: 1220, raw: encodeState(car) }, { slot: 7, at: 1234.5, raw: encodeState({ ...car, x: 1.8, brake: false }) }];
+  const snap = decodeSnapshot(packSnapshot(1234.5, cars));
   assert.equal(snap.time, 1234.5);
   assert.deepEqual(snap.cars.map((c) => c.slot), [0, 7]);
+  assert.deepEqual(snap.cars.map((c) => c.age), [15, 0]);
   assert.equal(snap.cars[1].state.brake, false);
   close(snap.cars[1].state.x, 1.8, 0.005);
 });

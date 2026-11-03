@@ -63,7 +63,7 @@ wss.on('connection', (ws, req) => {
     if (isBinary) {
       if (!room) return;
       const buf = new Uint8Array(raw as Buffer);
-      if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf);
+      if (buf[0] === BIN.STATE && isState(buf)) room.setState(id, buf, performance.now());
       else if (isTraffic(buf)) room.relayTraffic(id, buf, performance.now());
       return;
     }

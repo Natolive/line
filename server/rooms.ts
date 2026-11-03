@@ -6,7 +6,7 @@ import { MAX_PLAYERS, type PlayerInfo, type ServerMessage } from '../src/net/pro
 export const COUNTDOWN_MS = 3000;
 
 type Send = (m: ServerMessage | Uint8Array) => void;
-type Member = { info: PlayerInfo; send: Send; alive: boolean; slot: number; latest: Uint8Array | null };
+type Member = { info: PlayerInfo; send: Send; alive: boolean; slot: number; latest: Uint8Array | null; at: number };
 
 export class Room {
   readonly code: string;
@@ -31,7 +31,7 @@ export class Room {
   join(info: PlayerInfo, send: Send): string | null {
     if (this.racing) return 'A race is running in this room. Wait for it to finish, or pick another code.';
     if (this.members.size >= MAX_PLAYERS) return `This room is full (${MAX_PLAYERS} players).`;
-    this.members.set(info.id, { info, send, alive: false, slot: -1, latest: null });
+    this.members.set(info.id, { info, send, alive: false, slot: -1, latest: null, at: 0 });
     if (!this.host) this.host = info.id;
     send({ t: 'joined', you: info.id, room: this.code, host: this.host, players: this.players, racing: this.racing });
     this.broadcast({ t: 'lobby', host: this.host, players: this.players }, info.id);
@@ -64,10 +64,10 @@ export class Room {
     this.broadcast({ t: 'go', startsIn: COUNTDOWN_MS, grid });
   }
 
-  /** A player's car (raw binary, already size-checked): kept until the next tick. */
-  setState(id: string, raw: Uint8Array) {
+  /** A player's car (raw binary, already size-checked), received at server time `now`: kept until the next tick. */
+  setState(id: string, raw: Uint8Array, now: number) {
     const m = this.members.get(id);
-    if (this.racing && m?.alive) m.latest = raw;
+    if (this.racing && m?.alive) Object.assign(m, { latest: raw, at: now });
   }
 
   /** The host's traffic, relayed at once with the server time stamped in. */
@@ -75,10 +75,16 @@ export class Room {
     if (this.racing && id === this.host) this.broadcast(stampTraffic(raw, now), id);
   }
 
-  /** One server tick: a single snapshot of every car to every player (instead of each message to each player). */
+  /**
+   * One server tick: a single snapshot of the cars received since the last one, to every player.
+   * Each car is sent once, with its own receive time: re-sending an old state under a new time
+   * would make it stop for a tick and jump (clients and server both run at 30 Hz, out of phase).
+   */
   tick(now: number) {
     if (!this.racing) return;
-    const cars = [...this.members.values()].filter((m) => m.latest).map((m) => ({ slot: m.slot, raw: m.latest! }));
+    const fresh = [...this.members.values()].filter((m) => m.latest);
+    const cars = fresh.map((m) => ({ slot: m.slot, at: m.at, raw: m.latest! }));
+    for (const m of fresh) m.latest = null;
     if (cars.length) this.broadcast(packSnapshot(now, cars));
   }
 
