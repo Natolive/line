@@ -1,0 +1,26 @@
+# Production (server): started by /srv/line/deploy.sh after each push to main.
+# Caddy (separate stack, /srv/caddy) serves https://line.natolive.fr and reaches this container over the external
+# `proxy` network as `line-game` (service names are shared between projects on that network, hence the alias).
+# One container serves the built game and the multiplayer WebSocket (/ws) on port 3000.
+# `.env` next to this file (not versioned): IMAGE_TAG, written by deploy.sh.
+name: line
+
+services:
+  line:
+    image: ghcr.io/natolive/line:${IMAGE_TAG:?IMAGE_TAG missing in .env}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    networks:
+      proxy:
+        aliases: [line-game]
+
+networks:
+  proxy:
+    external: true

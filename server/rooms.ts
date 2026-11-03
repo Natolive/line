@@ -131,4 +131,8 @@ export class Rooms {
   tick(now: number) {
     for (const r of this.rooms.values()) r.tick(now);
   }
+
+  get count() {
+    return this.rooms.size;
+  }
 }

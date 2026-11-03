@@ -11,7 +11,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   game:
-    build: .
+    build: { context: ., target: dev }
     volumes:
       - .:/app
       - /app/node_modules # keep the container's Linux deps, not the host's
@@ -22,7 +22,7 @@ services:
       - traefik.http.services.lane.loadbalancer.server.port=5173
 
   server:
-    build: .
+    build: { context: ., target: dev }
     command: ["node", "server/index.ts"]
     volumes:
       - .:/app

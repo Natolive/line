@@ -80,6 +80,18 @@ Passing a car within 1 m earns a near-miss bonus.
 
 Hitting the guardrail slows you down; hitting a car ends the run.
 
+## Production
+
+Every push to `main` deploys automatically: GitHub Actions tests, builds the image (`ghcr.io/natolive/line:<commit>`), then runs `/srv/line/deploy.sh <commit>` on the server.
+
+Live at https://line.natolive.fr (once its DNS record exists), or http://57.129.174.3:8084 by IP.
+
+One container serves the game and the multiplayer server (`compose.prod.yml`); Caddy in front adds HTTPS.
+
+Roll back by hand on the server: `/srv/line/deploy.sh <older commit sha>`.
+
+Health check: `/health`.
+
 ## Develop without Docker
 
 Use Node 22: `nvm use`
