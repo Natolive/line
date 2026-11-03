@@ -3,7 +3,7 @@
 import type * as THREE from 'three';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
-import type { CarState, PlayerInfo, ServerMessage } from '../net/protocol.ts';
+import type { CarState, PlayerInfo, Result, ServerMessage } from '../net/protocol.ts';
 import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
 import type { Traffic } from '../world/traffic.ts';
@@ -19,7 +19,7 @@ export type BattleEvents = {
   lobby(): void;
   go(slot: { d: number; x: number }): void;
   out(id: string, reason: string, place: number): void;
-  winner(id: string | null, ranking: string[]): void;
+  winner(ranking: Result[]): void;
   error(message: string): void;
   closed(): void;
 };
@@ -214,7 +214,7 @@ export class Battle {
         return this.events.out(m.id, m.reason, m.place);
       case 'winner':
         this.startAt = Infinity;
-        return this.events.winner(m.id, m.ranking);
+        return this.events.winner(m.ranking);
     }
   }
 }

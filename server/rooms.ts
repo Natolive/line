@@ -1,12 +1,12 @@
 // Battle royale rooms: who's in, who hosts, who's still alive, who won, and the 30 Hz car snapshots.
 // No networking here, so it is testable.
-import { packSnapshot, stampTraffic } from '../src/net/codec.ts';
-import { MAX_PLAYERS, type PlayerInfo, type ServerMessage } from '../src/net/protocol.ts';
+import { packSnapshot, stampTraffic, stateD } from '../src/net/codec.ts';
+import { MAX_PLAYERS, type PlayerInfo, type Result, type ServerMessage } from '../src/net/protocol.ts';
 
 export const COUNTDOWN_MS = 3000;
 
 type Send = (m: ServerMessage | Uint8Array) => void;
-type Member = { info: PlayerInfo; send: Send; alive: boolean; slot: number; latest: Uint8Array | null; at: number };
+type Member = { info: PlayerInfo; send: Send; alive: boolean; slot: number; latest: Uint8Array | null; at: number; d: number }; // d: last reported road position (m)
 
 export class Room {
   readonly code: string;
@@ -14,7 +14,7 @@ export class Room {
   racing = false;
   spec: string | null = null; // garage car id whose figures everyone drives with, or null: each their own
   private members = new Map<string, Member>();
-  private out: string[] = []; // eliminated this race, first out first
+  private out: Result[] = []; // eliminated this race, first out first
 
   constructor(code: string) {
     this.code = code;
@@ -32,7 +32,7 @@ export class Room {
   join(info: PlayerInfo, send: Send): string | null {
     if (this.racing) return 'A race is running in this room. Wait for it to finish, or pick another code.';
     if (this.members.size >= MAX_PLAYERS) return `This room is full (${MAX_PLAYERS} players).`;
-    this.members.set(info.id, { info, send, alive: false, slot: -1, latest: null, at: 0 });
+    this.members.set(info.id, { info, send, alive: false, slot: -1, latest: null, at: 0, d: 0 });
     if (!this.host) this.host = info.id;
     send({ t: 'joined', you: info.id, room: this.code, host: this.host, players: this.players, racing: this.racing, spec: this.spec });
     this.broadcastLobby(info.id);
@@ -72,14 +72,16 @@ export class Room {
     this.racing = true;
     this.out = [];
     const grid = [...this.members.keys()].sort(() => Math.random() - 0.5);
-    grid.forEach((id, slot) => Object.assign(this.members.get(id)!, { alive: true, slot, latest: null }));
+    grid.forEach((id, slot) => Object.assign(this.members.get(id)!, { alive: true, slot, latest: null, d: 0 }));
     this.broadcast({ t: 'go', startsIn: COUNTDOWN_MS, grid });
   }
 
   /** A player's car (raw binary, already size-checked), simulated at server time `at` (see `stateTime`): kept until the next tick. */
   setState(id: string, raw: Uint8Array, at: number) {
     const m = this.members.get(id);
-    if (this.racing && m?.alive) Object.assign(m, { latest: raw, at });
+    if (!this.racing || !m?.alive) return;
+    const d = stateD(raw);
+    Object.assign(m, { latest: raw, at, d: Number.isFinite(d) ? d : m.d });
   }
 
   /** The host's traffic, relayed at once with its (clamped) simulation time stamped in. */
@@ -105,7 +107,7 @@ export class Room {
     const m = this.members.get(id);
     if (!this.racing || !m?.alive) return;
     m.alive = false;
-    this.out.push(id);
+    this.out.push({ id, name: m.info.name, out: reason, d: m.d });
     const place = this.alive().length + 1;
     this.broadcast({ t: 'out', id, reason, place });
     this.checkWinner();
@@ -125,9 +127,9 @@ export class Room {
     if (!this.racing) return;
     const alive = this.alive(), field = alive.length + this.out.length;
     if (alive.length > 1 || (alive.length === 1 && field === 1)) return;
-    const ranking = [...alive, ...[...this.out].reverse()];
+    const ranking = [...alive.map((id): Result => ({ id, name: this.members.get(id)!.info.name, out: null, d: this.members.get(id)!.d })), ...[...this.out].reverse()];
     this.racing = false;
-    this.broadcast({ t: 'winner', id: ranking[0] ?? null, ranking });
+    this.broadcast({ t: 'winner', id: ranking[0]?.id ?? null, ranking });
   }
 }
 

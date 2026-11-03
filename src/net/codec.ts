@@ -52,6 +52,9 @@ export function stateTime(buf: Uint8Array, now: number) {
 export const trafficTime = (buf: Uint8Array, now: number) =>
   Math.max(now - MAX_AGE, Math.min(now, new DataView(buf.buffer, buf.byteOffset).getFloat64(1) || now));
 
+/** Server: how far along the road a raw state says the car is (m), without decoding the rest. */
+export const stateD = (buf: Uint8Array) => new DataView(buf.buffer, buf.byteOffset).getFloat32(1);
+
 export const decodeState = (buf: Uint8Array) => readState(new DataView(buf.buffer, buf.byteOffset, buf.byteLength), 1);
 
 /** Server → clients: the cars received since the last tick, stamped with the server time (ms).

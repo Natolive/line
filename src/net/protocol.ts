@@ -4,6 +4,9 @@
 
 export type PlayerInfo = { id: string; name: string; car: string };
 
+/** A line of the final ranking: how far each driver got (m along the road) and how they went out (null: still racing, the winner). */
+export type Result = { id: string; name: string; out: 'crash' | 'wall' | 'left' | null; d: number };
+
 /** A player's car, sent 30 times a second by its own game (binary, see codec.ts). */
 export type CarState = {
   d: number;
@@ -33,6 +36,6 @@ export type ServerMessage =
   | { t: 'go'; startsIn: number; grid: string[] } // countdown in ms; grid = starting order, index = slot in snapshots
   | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)
   | { t: 'out'; id: string; reason: 'crash' | 'wall' | 'left'; place: number }
-  | { t: 'winner'; id: string | null; ranking: string[] }; // ranking: winner first
+  | { t: 'winner'; id: string | null; ranking: Result[] }; // ranking: winner first
 
 export const MAX_PLAYERS = 16;

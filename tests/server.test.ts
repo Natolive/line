@@ -32,15 +32,24 @@ test('only the host can start, and nobody can join a running race', () => {
   assert.notEqual(r.join({ id: 'late', name: 'late', car: 'car-bmw' }, () => {}), null);
 });
 
-test('last driver standing wins; ranking goes from winner to first out', () => {
+const at = (d: number) => encodeState({ d, x: 0, heading: 0, speed: 30, steer: 0, brake: false, score: 0 });
+
+test('last driver standing wins; ranking goes from winner to first out, with how far each got and how they went out', () => {
   const { r, last } = room(3);
   r.start('p0');
+  r.setState('p0', at(900), 0);
+  r.setState('p1', at(400), 0);
+  r.setState('p2', at(650), 0);
   r.eliminate('p1', 'wall');
   assert.equal(r.racing, true);
   r.eliminate('p1', 'crash'); // reported twice: counted once
   r.leave('p2'); // leaving mid-race counts as out
   const w = last('p0', 'winner');
-  assert.deepEqual(w, { t: 'winner', id: 'p0', ranking: ['p0', 'p2', 'p1'] });
+  assert.deepEqual(w, { t: 'winner', id: 'p0', ranking: [
+    { id: 'p0', name: 'p0', out: null, d: 900 },
+    { id: 'p2', name: 'p2', out: 'left', d: 650 }, // still named, though gone
+    { id: 'p1', name: 'p1', out: 'wall', d: 400 },
+  ] });
   assert.equal(r.racing, false);
 });
 
@@ -48,7 +57,7 @@ test('a solo room ends when its only driver is out', () => {
   const { r, last } = room(1);
   r.start('p0');
   r.eliminate('p0', 'crash');
-  assert.deepEqual(last('p0', 'winner'), { t: 'winner', id: 'p0', ranking: ['p0'] });
+  assert.deepEqual(last('p0', 'winner'), { t: 'winner', id: 'p0', ranking: [{ id: 'p0', name: 'p0', out: 'crash', d: 0 }] });
 });
 
 test('each tick sends one snapshot with every racing car, by grid slot', () => {

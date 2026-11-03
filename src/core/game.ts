@@ -100,6 +100,7 @@ export class Game {
       start: () => this.battle?.start(),
       leave: () => this.leaveBattle(),
       spec: () => this.cycleSpec(),
+      back: () => this.action(),
     });
     this.hud.setName(load(NAME_KEY) ?? '');
     document.addEventListener('visibilitychange', () => {
@@ -219,9 +220,8 @@ export class Game {
           this.hud.popup(id === b.me ? `Out · ${ordinal(place)}` : `${b.nameOf(id)} ${reason === 'wall' ? 'caught by the storm' : reason === 'left' ? 'left' : 'crashed'}`);
           if (id === b.me) this.hud.setEliminated(place, reason);
         },
-        winner: (id, ranking) => {
-          const b = this.battle!;
-          this.hud.setResults(ranking.map((p) => b.nameOf(p)), id === b.me);
+        winner: (ranking) => {
+          this.hud.setResults(ranking, this.battle!.me);
           this.sfx.silenceLoops();
           this.setState('results');
         },

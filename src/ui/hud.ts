@@ -1,6 +1,6 @@
 // DOM overlay: dashboard while driving, plus the menu, pause, game-over and battle royale screens.
 import type { Car } from '../data/cars/index.ts';
-import type { PlayerInfo } from '../net/protocol.ts';
+import type { PlayerInfo, Result as Standing } from '../net/protocol.ts';
 
 export type Screen = 'menu' | 'play' | 'pause' | 'over' | 'mp' | 'lobby' | 'countdown' | 'out' | 'results';
 export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; ahead: number; fix: number }; // ahead: ms rivals are predicted past their reports; fix: m each report corrects // wall: meters ahead of the storm
@@ -41,7 +41,7 @@ export class Hud {
 
   // ---- battle royale ----
 
-  onBattle(h: { open(): void; join(name: string, room: string): void; start(): void; leave(): void; spec(): void }) {
+  onBattle(h: { open(): void; join(name: string, room: string): void; start(): void; leave(): void; spec(): void; back(): void }) {
     const room = $('mp-room') as HTMLInputElement, name = $('mp-name') as HTMLInputElement;
     room.value = Math.random().toString(36).slice(2, 7).toUpperCase().replace(/[^A-Z0-9]/g, 'X'); // a fresh code to share
     $('to-battle').addEventListener('click', h.open);
@@ -51,6 +51,7 @@ export class Hud {
     });
     $('lobby-start').addEventListener('click', h.start);
     $('lobby-spec').addEventListener('click', h.spec);
+    $('results-back').addEventListener('click', h.back);
     for (const id of ['lobby-leave', 'results-leave', 'mp-back']) $(id).addEventListener('click', h.leave);
   }
 
@@ -130,11 +131,16 @@ export class Hud {
     $('out-hint').hidden = racing < 2;
   }
 
-  setResults(ranking: string[], won: boolean) {
-    $('results-title').textContent = won ? 'Last one standing' : 'Race over';
-    $('results-list').replaceChildren(...ranking.map((name) => {
-      const li = document.createElement('li');
-      li.textContent = name;
+  /** Final ranking, winner first; `me` is highlighted. */
+  setResults(ranking: Standing[], me: string) {
+    $('results-title').textContent = ranking[0]?.id === me ? 'Last one standing' : 'Race over';
+    const how = { crash: 'Wrecked', wall: 'Storm', left: 'Left', winner: 'Winner' };
+    $('results-list').replaceChildren(...ranking.map((r) => {
+      const li = document.createElement('li'), detail = document.createElement('span');
+      li.textContent = `${r.name}${r.id === me ? ' (you)' : ''}`;
+      li.classList.toggle('me', r.id === me);
+      detail.textContent = `${(Math.max(0, r.d) / 1000).toFixed(1)} km · ${how[r.out ?? 'winner']}`;
+      li.append(detail);
       return li;
     }));
   }
