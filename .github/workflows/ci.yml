@@ -88,7 +88,6 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy nathan@57.129.174.3 ${{ github.sha }}
-      # From the outside, through Caddy: the game page and the server behind it.
-      # Direct IP port until line.natolive.fr exists in DNS; then check https://line.natolive.fr/health instead.
+      # From the outside: DNS, certificate, Caddy, then the game server behind it.
       - name: Check the site
-        run: curl -fsS --retry 5 --retry-delay 3 --retry-all-errors http://57.129.174.3:8084/health
+        run: curl -fsS --retry 5 --retry-delay 3 --retry-all-errors https://line.natolive.fr/health

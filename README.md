@@ -84,7 +84,7 @@ Hitting the guardrail slows you down; hitting a car ends the run.
 
 Every push to `main` deploys automatically: GitHub Actions tests, builds the image (`ghcr.io/natolive/line:<commit>`), then runs `/srv/line/deploy.sh <commit>` on the server.
 
-Live at https://line.natolive.fr (once its DNS record exists), or http://57.129.174.3:8084 by IP.
+Live at https://line.natolive.fr (http redirects to https), or http://57.129.174.3:8084 by IP on networks that filter natolive.fr.
 
 One container serves the game and the multiplayer server (`compose.prod.yml`); Caddy in front adds HTTPS.
 
