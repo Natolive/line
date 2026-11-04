@@ -4,6 +4,7 @@ import { CARRIAGEWAY_HALF, GUARDRAIL_X, LANES, SHOULDER, TRAFFIC, WALL } from '.
 import { GARAGE } from '../src/data/cars/index.ts';
 import { TRANSITION_LENGTH, ZONE_LENGTH } from '../src/data/themes.ts';
 import { rectsOverlap } from '../src/rules/collision.ts';
+import { crashSeverity, groundLift, shunt, startWreck, stepWreck } from '../src/rules/crash.ts';
 import { densityAt, multiplierFor, onShoulder } from '../src/rules/difficulty.ts';
 import { stepSpring } from '../src/rules/spring.ts';
 import { themeBlend, themeIndexAt } from '../src/rules/themes.ts';
@@ -85,6 +86,65 @@ test('a broken-down car blocks the whole hard shoulder but not the right lane', 
     assert.ok(onShoulder(x));
     assert.ok(rectsOverlap({ x, z: 0, w, l, heading: 0 }, parked), `slipped past at x = ${x}`);
   }
+});
+
+test('a crash wreck slides, rolls over only at speed, and comes to rest flat between the rails', () => {
+  const seq = (...v: number[]) => () => v.length > 1 ? v.shift()! : v[0];
+  for (const [speed, rolls] of [[15, false], [60, true]] as const) {
+    for (const side of [0.2, 0.8]) {
+      const w = startWreck(LANES[3], 0, speed, 1.9, 1.3, seq(side, 0.5));
+      let maxRoll = 0, t = 0;
+      for (; t < 10; t += 1 / 120) {
+        stepWreck(w, 1 / 120);
+        maxRoll = Math.max(maxRoll, Math.abs(w.roll));
+        assert.ok(Math.abs(w.x) < GUARDRAIL_X, `through the rail at ${speed} m/s`);
+        assert.ok(w.y >= groundLift(w.w, w.h, w.roll) - 1e-9, 'sank into the road');
+        if (Math.hypot(w.vx, w.vs) < 0.01 && Math.abs(w.rollRate) < 0.01 && w.vy === 0) break;
+      }
+      assert.ok(t < 10, `still moving after 10 s at ${speed} m/s`);
+      assert.equal(maxRoll > Math.PI / 2, rolls, `rollover at ${speed} m/s`);
+      assert.ok(Math.abs(Math.sin(w.roll)) < 0.02, 'rests on its wheels or roof, not balanced on a side');
+      assert.ok(w.s > 0, 'slides on down the road');
+    }
+  }
+});
+
+test('a crash grows with speed: further slide, more spin, more rolling', () => {
+  const run = (speed: number) => {
+    const w = startWreck(0, 0, speed, 1.9, 1.3, () => 0.7);
+    let rolled = 0, spun = 0, top = 0;
+    for (let t = 0; t < 12; t += 1 / 120) {
+      stepWreck(w, 1 / 120);
+      rolled += Math.abs(w.rollRate) / 120;
+      spun += Math.abs(w.yawRate) / 120;
+      top = Math.max(top, w.y);
+    }
+    return { slid: w.s, rolled, spun, top };
+  };
+  const runs = [10, 30, 50, 70].map(run);
+  for (let i = 1; i < runs.length; i++) {
+    for (const key of ['slid', 'spun'] as const) assert.ok(runs[i][key] > runs[i - 1][key], `${key} at run ${i}`);
+    for (const key of ['rolled', 'top'] as const) assert.ok(runs[i][key] >= runs[i - 1][key], `${key} at run ${i}`);
+  }
+  assert.equal(runs[0].rolled, 0, 'a slow crash does not tip the car');
+  assert.ok(runs[3].rolled > runs[2].rolled && runs[3].rolled > 2 * Math.PI, 'a fast one rolls it over, more than once');
+  assert.equal(crashSeverity(0), 0);
+  assert.equal(crashSeverity(1000), 2);
+});
+
+test('a wreck and a car it touches shunt: shared speed, pushed apart, never through each other', () => {
+  const wreck = { d: 102, speed: 20, l: 4.5 }, car = { d: 104, speed: 10, l: 4.5 }; // overlapping, wreck closing in
+  shunt(wreck, car);
+  assert.equal(wreck.speed, 15);
+  assert.equal(car.speed, 15);
+  assert.ok(car.d - wreck.d >= 4.5, 'still inside the car');
+  const ahead = { d: 200, speed: 0, l: 4.5 }, follower = { d: 197, speed: 25, l: 12 }; // a truck runs into a stopped wreck
+  shunt(ahead, follower);
+  assert.ok(ahead.speed > 0 && ahead.speed === follower.speed, 'the wreck is shoved on');
+  assert.ok(ahead.d - follower.d >= (4.5 + 12) / 2);
+  const away = { d: 0, speed: 5, l: 4.5 }, leader = { d: 3, speed: 30, l: 4.5 }; // pulling away: left alone
+  shunt(away, leader);
+  assert.deepEqual([away.speed, leader.speed, away.d], [5, 30, 0]);
 });
 
 test('suspension spring rebounds once, then settles on its target', () => {

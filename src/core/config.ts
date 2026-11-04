@@ -11,6 +11,7 @@ export const SHOULDER = {
   drag: 3, // m/s² of extra deceleration with the car's centre past the edge line
   breakdownGap: [1200, 400] as [left: number, right: number], // m on average between broken-down cars per side, randomised ±50%
   queueGap: [20, 45] as [min: number, max: number], // m between them while someone drives on that shoulder: no gap to weave through
+  queueMax: 5, // cars in such a block, then the usual spacing until the shoulder is left and taken again
 };
 
 export const SUSPENSION = {
@@ -49,7 +50,25 @@ export const TRAFFIC = {
 
 export const NEAR_MISS = { gap: 1.0, minSpeed: 25, points: 250 };
 export const SCORE_TIERS: [kmh: number, multiplier: number][] = [[250, 4], [200, 3], [150, 2], [0, 1]];
-export const CRASH_DURATION = 1.8;
+// The wreck (rules/crash.ts): it slides on, spins and, at speed, rolls over.
+export const CRASH = {
+  duration: 3.5, // s of crash scene before the game-over screen or spectating
+  keep: 0.55, // share of the speed the wreck keeps after the impact
+  sideKick: 0.25, // lateral m/s per forward m/s, thrown to a random side
+  fullSpeed: 50, // m/s (180 km/h): the speed the figures below are given for; the crash scales with speed (×2 at most)
+  spin: 4, // rad/s of yaw, randomised
+  spinDamp: 1.5, // 1/s, yaw slowing while it scrapes the ground
+  rollSpeed: 25, // m/s (90 km/h): faster impacts start to tip the car, rolling it more the faster they are
+  launch: 4.5, // m/s upward, randomised
+  rollRate: 8, // rad/s, randomised
+  rollDamp: 1.2, // 1/s, roll slowing on the ground
+  settleRate: 2.5, // rad/s: below this it can't tip over again and settles on its wheels or roof
+  friction: 0.8, // × g, sliding on tyres, body or roof
+  bounce: 0.3, // vertical speed kept at each landing
+  landingSpeed: 2, // m/s downward: a landing hard enough to bounce (and throw debris)
+  slowMo: 0.3, // time scale right at the impact (at fullSpeed; none at a standstill)
+  slowMoTime: 0.8, // s (real) to ease back to full speed
+};
 
 // Battle royale: a storm wall chases the pack and speeds up; caught = eliminated.
 export const WALL = {

@@ -50,6 +50,32 @@ html, body {
 .mult[data-tier="3"] { background: #b8860b; }
 .mult[data-tier="4"] { background: var(--accent); }
 
+/* Rear-view mirror: the frame and glare are drawn here, the view behind is rendered into its glass (world/stage.ts). */
+#mirror {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  width: clamp(150px, 30vw, 380px);
+  aspect-ratio: 3.4;
+  border: 5px solid #15171b;
+  border-radius: 28px; /* one radius: the glass is cut to match in world/stage.ts */
+  background: linear-gradient(165deg, rgb(255 255 255 / 0.22) 0%, rgb(255 255 255 / 0.05) 28%, transparent 45%); /* glare on the glass */
+  box-shadow: 0 8px 22px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.1), inset 0 0 14px rgb(0 0 0 / 0.55);
+}
+#mirror::before { /* the stem it hangs from */
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 16px;
+  height: 40px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, #0d0e10, #2a2d33 50%, #0d0e10);
+  border-radius: 4px 4px 0 0;
+}
+#mirror[hidden] { display: none; }
+
 #pause-btn {
   pointer-events: auto;
   font: 700 14px var(--font);

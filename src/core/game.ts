@@ -7,6 +7,7 @@ import type { CarState } from '../net/protocol.ts';
 import { Sfx } from '../platform/audio.ts';
 import { Input } from '../platform/input.ts';
 import { rectsOverlap } from '../rules/collision.ts';
+import { crashSeverity, shunt, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { multiplierFor } from '../rules/difficulty.ts';
 import { themeBlend, themeIndexAt, toNextBorder } from '../rules/themes.ts';
 import { measure } from '../rules/vehicle.ts';
@@ -25,7 +26,7 @@ import type { Fleet } from '../world/vehicles/fleet.ts';
 import { setNight } from '../world/vehicles/lights.ts';
 import { Battle } from './battle.ts';
 import type { Car } from '../data/cars/index.ts';
-import { BUMP, CRASH_DURATION, NEAR_MISS, START_SPEED } from './config.ts';
+import { BUMP, CRASH, NEAR_MISS, START_SPEED } from './config.ts';
 
 type State = Screen | 'crash';
 const BEST_KEY = 'line-best', CAR_KEY = 'line-car', NAME_KEY = 'line-name';
@@ -53,6 +54,8 @@ export class Game {
   private time = 0;
   private nearMisses = 0;
   private crashT = 0;
+  private crashClock = 0; // real seconds since the impact, for the slow motion
+  private crashSlowMo = 1; // time scale at the impact: slower the harder the crash
   private wreckD = 0; // road position where I crashed: the world may scroll on with someone else (spectating)
   private watching: string | null = null; // the rival the camera follows once I'm out
   private scrapeCooldown = 0;
@@ -92,7 +95,10 @@ export class Game {
         else if (this.state === 'out') this.switchWatch(1);
       },
     });
-    this.hud.onPause(() => this.back());
+    this.hud.onPause(() => this.back(), () => {
+      this.sfx.silenceLoops();
+      this.setState('menu');
+    });
     this.hud.onGarage((dir) => this.cycleCar(dir), () => this.setState('menu'));
     this.hud.onBattle({
       open: () => this.setState('mp'),
@@ -122,7 +128,9 @@ export class Game {
       if (this.battle) this.battle.frameAt = now;
       this.update(dt);
       this.applyTheme();
-      this.stage.render(this.fx.shake);
+      // rear-view mirror while driving (and on the start grid); the HUD draws its frame
+      const glass = this.hud.mirror(['play', 'countdown', 'pause'].includes(this.state));
+      this.stage.render(this.fx.shake, glass && { camera: this.player.mirror, rect: glass });
     });
   }
 
@@ -133,6 +141,7 @@ export class Game {
 
   private setState(s: State) {
     this.state = s;
+    if (s === 'menu' && this.player.wreck) this.player.reset(0); // the garage shows the car whole again
     if (s !== 'crash') this.hud.show(s);
     if (s === 'pause') this.sfx.suspend();
     else this.sfx.resume();
@@ -331,8 +340,11 @@ export class Game {
       }
       case 'crash':
       case 'out': {
-        this.player.update(dt, IDLE);
-        let forward = 0, cam = { x: p.x, heading: p.heading, speed: 0 };
+        // slow motion right at the impact, easing back to full speed
+        this.crashClock += dt;
+        const sdt = dt * Math.min(1, this.crashSlowMo + (1 - this.crashSlowMo) * (this.crashClock / CRASH.slowMoTime) ** 2);
+        const ev = this.player.update(sdt, IDLE).wreck;
+        let forward = 0, cam: { x: number; heading: number; speed: number } | null = null;
         if (b) {
           b.sync(dt, this.dist);
           // out: ride with a rival still racing; the road, scenery and traffic scroll with them
@@ -350,12 +362,24 @@ export class Game {
           b.publish(dt, null);
           this.hud.setBattle(this.battleStats());
         }
-        const wreck = this.player.car.mesh.position.setZ(this.dist - this.wreckD);
-        this.traffic.update(dt, this.me, b?.rivals.drivers() ?? [], this.dist / 1000, !b); // solo: traffic brakes for the wreck
-        this.fx.update(dt, forward);
-        this.smoke.update(dt, forward);
-        if (Math.abs(wreck.z) < 150 && Math.random() < dt * 25) this.puff(wreck.clone().setY(0.8), 0x2b2b2b, 1.2, 4, 2.5, 0.55);
-        this.stage.follow(cam.x, cam.heading, cam.speed, dt);
+        const wreck = this.player.car.mesh.position.setZ(this.dist - this.wreckD - (this.player.wreck?.s ?? 0));
+        // traffic stops for the wreck where it is now, and can't drive through it
+        const drivers: Driver[] = b?.rivals.drivers() ?? [], w = this.player.wreck;
+        if (w && Math.abs(this.wreckD + w.s - this.dist) < 300) {
+          const me = { d: this.wreckD + w.s, x: w.x, speed: w.vs, rect: this.player.rect };
+          drivers.push(me);
+          const car = this.traffic.hits(me);
+          if (car) this.collideWreck(w, car);
+        }
+        this.traffic.update(b ? dt : sdt, this.me, drivers, this.dist / 1000, false);
+        this.fx.update(sdt, forward);
+        this.smoke.update(sdt, forward);
+        if (Math.abs(wreck.z) < 150) {
+          if (ev) this.wreckFx(ev, wreck);
+          if (Math.random() < sdt * 25) this.puff(wreck.clone().setY(0.8), 0x2b2b2b, 1.2, 4, 2.5, 0.55);
+        }
+        if (cam) this.stage.follow(cam.x, cam.heading, cam.speed, dt);
+        else this.stage.watch(wreck, dt);
         if (this.state === 'crash' && (this.crashT -= dt) <= 0) {
           if (b) this.setState('out');
           else this.gameOver();
@@ -364,9 +388,11 @@ export class Game {
       }
       default:
         this.idleT += dt;
+        if (this.player.wreck) this.player.update(dt, IDLE); // still sliding when the game-over screen comes up
         this.fx.update(dt, 0);
         this.smoke.update(dt, 0);
-        this.stage.orbit(this.idleT, p.x);
+        const at = this.player.car.mesh.position;
+        this.stage.orbit(this.idleT, at.x, at.z);
     }
   }
 
@@ -432,21 +458,52 @@ export class Game {
     this.smoke.emit(at, { color, size, grow, life, alpha, velocity });
   }
 
+  /** The wreck and a traffic car it touches shunt each other (rules/crash.ts), with a bang if it was a real hit. */
+  private collideWreck(w: Wreck, car: { d: number; speed: number; x: number; v: { l: number } }) {
+    const a = { d: this.wreckD + w.s, speed: w.vs, l: this.player.car.l }, c = { d: car.d, speed: car.speed, l: car.v.l };
+    const closing = Math.abs(a.speed - c.speed);
+    shunt(a, c);
+    w.s = a.d - this.wreckD;
+    w.vs = a.speed;
+    Object.assign(car, { d: c.d, speed: c.speed });
+    w.vx += Math.sign(w.x - car.x || 1) * Math.min(3, closing * 0.2); // glance off sideways
+    if (closing > 3) {
+      this.fx.burst(this.player.car.mesh.position.clone().setY(0.8), [0x2a2a2a, 0x8a8a8a, 0xcfe8ff], 12, 5);
+      this.fx.shake = Math.max(this.fx.shake, 0.4);
+      this.sfx.thud();
+    }
+  }
+
+  /** Sparks, dust and bangs from the tumbling wreck at `at`. */
+  private wreckFx(ev: WreckEvents, at: THREE.Vector3) {
+    const w = this.player.wreck!;
+    if (ev.landed) {
+      this.fx.burst(at.clone().setY(0.4), [0x2a2a2a, 0x8a8a8a, 0xdddddd], 14, 6);
+      this.fx.shake = Math.max(this.fx.shake, 0.5);
+      this.sfx.thud();
+    }
+    if ((ev.scrape || ev.rail) && Math.random() < 0.5) this.fx.burst(at.clone().setY(0.3), [0xffb347, 0xffe08a], 3, 5);
+    if (Math.hypot(w.vx, w.vs) > 3 && w.vy === 0 && Math.random() < 0.5) this.puff(at.clone().setY(0.3), 0x9a9a9a, 1, 3, 1.2, 0.35); // dust and tyre smoke
+  }
+
   private crash(reason: 'crash' | 'wall' = 'crash') {
     if (this.state !== 'play') return;
-    const at = this.player.car.mesh.position.clone().setY(0.9);
+    // everything scales with the speed of the impact
+    const at = this.player.car.mesh.position.clone().setY(0.9), k = crashSeverity(this.player.state.speed), n = (c: number) => Math.round(c * (0.2 + 0.8 * k));
     if (reason === 'wall') this.fx.burst(at, [0xff3030, 0x7a0000, 0x2a2a2a], 40, 6);
     else {
-      this.fx.burst(at, [0x2a2a2a, 0x8a8a8a, 0xdddddd], 30, 9);
-      this.fx.burst(at, [0xcfe8ff], 25, 7); // glass
+      this.fx.burst(at, [0x2a2a2a, 0x8a8a8a, 0xdddddd], n(30), 3 + 6 * k);
+      this.fx.burst(at, [0xcfe8ff], n(25), 2 + 5 * k); // glass
     }
-    this.fx.shake = 0.9;
+    this.fx.shake = Math.min(1.4, 0.2 + 0.7 * k);
+    this.crashSlowMo = 1 - (1 - CRASH.slowMo) * Math.min(1, k);
     this.player.crash();
     this.sfx.silenceLoops();
-    this.sfx.crash();
+    this.sfx.crash(k);
     this.battle?.eliminated(reason, this.dist);
     this.wreckD = this.dist;
-    this.crashT = CRASH_DURATION;
+    this.crashT = CRASH.duration;
+    this.crashClock = 0;
     this.setState('crash');
   }
 

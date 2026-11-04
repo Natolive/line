@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GUARDRAIL_X, LANES, SHOULDER } from '../core/config.ts';
 import type { Car } from '../data/cars/index.ts';
 import type { Rect } from '../rules/collision.ts';
+import { startWreck, stepWreck, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { onShoulder } from '../rules/difficulty.ts';
 import { stepVehicle, type DriveInput, type VehicleState } from '../rules/vehicle.ts';
 import type { Fleet } from './vehicles/fleet.ts';
@@ -17,11 +18,12 @@ export class Player {
   lateralAccel = 0;
   gear = 1;
   rpm = 0;
-  private spin = 0;
+  wreck: Wreck | null = null; // set from the crash until the next reset
   private suspension = new Suspension();
   private scene: THREE.Scene;
   private fleet: Fleet;
   // two headlight beams that really light the road; off by day
+  readonly mirror = new THREE.PerspectiveCamera(50, 3.4, 0.3, 6000); // rear-view: rides on the car, looking back; far enough for the sky dome
   private beams = [-1, 1].map(() => new THREE.SpotLight(0xfff1d6, 0, 110, 0.38, 0.6, 1.2));
 
   constructor(scene: THREE.Scene, fleet: Fleet, choice: Car) {
@@ -50,6 +52,9 @@ export class Player {
       b.target.position.set(side * 1.2, 0, front - 30);
       this.car.mesh.add(b, b.target);
     });
+    this.mirror.position.set(0, 1.2, this.car.l / 2 + 0.3); // just behind the tail, so the car stays out of shot
+    this.mirror.rotation.set(-0.03, Math.PI, 0);
+    this.car.mesh.add(this.mirror);
     this.scene.add(this.car.mesh);
     setBrakeLights(this.car, false);
     this.reset(0);
@@ -62,24 +67,29 @@ export class Player {
   /** Back on the road at lateral position `x` (a lane centre by default), rolling at `speed`. */
   reset(speed: number, x = LANES[2]) {
     this.state = { x, heading: 0, speed, steer: 0 };
-    this.spin = 0;
+    this.wreck = null;
     this.lateralAccel = 0;
     this.suspension.reset(this.car.body);
     this.sync(0);
   }
 
   crash() {
-    this.spin = (Math.random() < 0.5 ? -1 : 1) * 7;
-    this.state.speed = 0;
+    const s = this.state, h = new THREE.Box3().setFromObject(this.car.body).max.y;
+    this.wreck = startWreck(s.x, s.heading, s.speed, this.car.w, h);
+    s.speed = 0;
+    setBrakeLights(this.car, false);
   }
 
   /** Advances the car. `forward` is how far it travelled down the road this frame. */
-  update(dt: number, input: DriveInput) {
-    const car = this.car;
-    if (this.spin) {
-      car.mesh.rotation.y += this.spin * dt;
-      this.spin *= Math.max(0, 1 - dt * 2);
-      return { forward: 0, scraped: false };
+  update(dt: number, input: DriveInput): { forward: number; scraped: boolean; wreck?: WreckEvents } {
+    const car = this.car, w = this.wreck;
+    if (w) {
+      const wreck = stepWreck(w, dt);
+      Object.assign(this.state, { x: w.x, heading: w.yaw });
+      car.mesh.position.set(w.x, w.y, -w.s);
+      car.mesh.rotation.set(0, -w.yaw, w.roll);
+      spinWheels(car, w.vs * dt * Math.cos(w.roll)); // wheels turn only while it rides on them
+      return { forward: 0, scraped: false, wreck };
     }
 
     const r = stepVehicle(this.state, input, dt, this.physics);

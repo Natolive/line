@@ -85,6 +85,16 @@ export class Hud {
     $('lobby-spec-info').textContent = text;
   }
 
+  /** Shows or hides the rear-view mirror; when shown, returns its glass (inside the frame) in CSS pixels. */
+  mirror(on: boolean) {
+    const el = $('mirror');
+    el.hidden = !on;
+    if (!on) return null;
+    const r = el.getBoundingClientRect(), w = el.clientWidth, h = el.clientHeight;
+    const radius = Math.min(w / 2, h / 2, Math.max(0, parseFloat(getComputedStyle(el).borderTopLeftRadius) - el.clientTop)); // inner corner
+    return { x: r.left + el.clientLeft, y: r.top + el.clientTop, w, h, radius };
+  }
+
   setFps(fps: number) {
     $('fps').textContent = String(Math.round(fps));
   }
@@ -208,7 +218,8 @@ export class Hud {
     $('to-garage').addEventListener('click', open);
   }
 
-  onPause(fn: () => void) {
+  onPause(fn: () => void, quit: () => void) {
     $('pause-btn').addEventListener('click', fn);
+    $('pause-quit').addEventListener('click', quit);
   }
 }

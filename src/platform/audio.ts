@@ -47,10 +47,13 @@ export class Sfx {
     this.engine?.whistleGain.gain.setTargetAtTime(0, this.ctx!.currentTime, 0.1);
   }
 
-  crash() {
-    this.burst(0.9, 'lowpass', 2500, 150, 0.5);
-    this.burst(0.25, 'highpass', 3000, 6000, 0.2); // glass
+  /** `k`: how hard (0..2, see crashSeverity). */
+  crash(k = 1) {
+    const g = Math.min(1, 0.3 + 0.5 * k);
+    this.burst(0.5 + 0.4 * g, 'lowpass', 2500, 150, 0.5 * g);
+    this.burst(0.25, 'highpass', 3000, 6000, 0.2 * g); // glass
   }
+  thud() { this.burst(0.35, 'lowpass', 900, 80, 0.35); } // the wreck landing
   nearMiss() { this.burst(0.35, 'bandpass', 500, 2500, 0.18); }
   scrape() { this.burst(0.12, 'highpass', 2500, 4000, 0.1); }
 

@@ -54,6 +54,7 @@ export class Traffic {
   private clock = 0;
   private nextId = 1;
   private nextBreakdown = [0, 0]; // road position of the next broken-down car, left and right shoulder
+  private queued = [0, 0]; // cars already queued for whoever is riding that shoulder
   private viewD = 0; // road position of the local player: everything is drawn relative to it
 
   constructor(scene: THREE.Scene, fleet: Fleet) {
@@ -69,6 +70,7 @@ export class Traffic {
     this.cars = [];
     if (this.remote) return;
     this.nextBreakdown = [0, 1].map((side) => me.d + 150 + nextGap(side));
+    this.queued = [0, 0];
     for (let d = me.d + 70; d < me.d - T.spawnAhead; d += 22 + Math.random() * 25) this.trySpawn(d, [me]);
   }
 
@@ -116,10 +118,13 @@ export class Traffic {
     for (const side of [0, 1]) {
       const sign = side ? 1 : -1, ridden = drivers.some((p) => onShoulder(p.x) && Math.sign(p.x) === sign);
       if (this.nextBreakdown[side] < front) this.nextBreakdown[side] = horizon; // e.g. just took over as host
-      if (ridden) this.nextBreakdown[side] = Math.min(this.nextBreakdown[side], horizon); // start the queue now
+      const queue = ridden && this.queued[side] < SHOULDER.queueMax;
+      if (!ridden) this.queued[side] = 0;
+      if (queue) this.nextBreakdown[side] = Math.min(this.nextBreakdown[side], horizon); // start the block now
       if (this.nextBreakdown[side] >= horizon) continue;
       this.add(Math.floor(Math.random() * this.heavyFrom), this.nextBreakdown[side], sign * SHOULDER.x, 0, false);
-      this.nextBreakdown[side] += nextGap(side, ridden);
+      if (queue) this.queued[side]++;
+      this.nextBreakdown[side] += nextGap(side, queue && this.queued[side] < SHOULDER.queueMax);
     }
     const wanted = Math.min(70, densityAt(km) * (1 + (front - back) / 500));
     if (this.cars.filter((c) => !parked(c)).length < wanted) {
@@ -131,8 +136,9 @@ export class Traffic {
     return nearMisses;
   }
 
+  /** The traffic car `me` touches, if any. */
   hits(me: Driver) {
-    return this.cars.some((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d)));
+    return this.cars.find((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d)));
   }
 
   /** What the host sends to the other players. */

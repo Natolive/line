@@ -18,7 +18,7 @@ const lightGeo = new THREE.BoxGeometry(1, 1, 1);
 const box = (objs: THREE.Object3D[]) => objs.reduce((b, o) => b.union(new THREE.Box3().setFromObject(o, true)), new THREE.Box3());
 
 function light(parent: THREE.Object3D, role: Role, mat: THREE.Material, size: [number, number, number], pos: [number, number, number], visible = false) {
-  const m = role === 'glow' ? new THREE.Sprite(mat as THREE.SpriteMaterial) : new THREE.Mesh(lightGeo, mat);
+  const m = mat instanceof THREE.SpriteMaterial ? new THREE.Sprite(mat) : new THREE.Mesh(lightGeo, mat);
   m.scale.set(...size);
   m.position.set(...pos);
   m.visible = visible;
