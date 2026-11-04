@@ -34,7 +34,11 @@ export function pickGear(c: CarPhysics, speed: number, throttle: number) {
   return { gear: best + 1, rpm: Math.min(rpm, c.redline) };
 }
 
-export function stepVehicle(s: VehicleState, input: DriveInput, dt: number, c: CarPhysics) {
+/**
+ * `curvature` (1/m, + = bending right) is the road's under the car: heading is measured from the road, so
+ * as the road turns under a car that goes straight, the car points out of the bend and drifts to the outside.
+ */
+export function stepVehicle(s: VehicleState, input: DriveInput, dt: number, c: CarPhysics, curvature = 0) {
   const v = s.speed;
   // Speed-sensitive steering: full lock at any speed puts you right at the grip limit, not past it.
   const steerLimit = Math.min(c.maxSteer, Math.atan((c.grip * 1.1 * c.wheelbase) / Math.max(v * v, 1)));
@@ -46,6 +50,7 @@ export function stepVehicle(s: VehicleState, input: DriveInput, dt: number, c: C
   const yaw = clamp((v / c.wheelbase) * Math.tan(steer), -maxYaw, maxYaw);
   let heading = s.heading + yaw * dt;
   if (input.steer === 0) heading -= heading * Math.min(1, c.stabilityAssist * dt);
+  heading -= curvature * v * Math.cos(s.heading) * dt;
   heading = clamp(heading, -c.maxHeading, c.maxHeading);
 
   // engine → gearbox → wheels, capped by what the driven tyres can put down, cut at the limiter

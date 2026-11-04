@@ -3,8 +3,11 @@ import { TRANSITION_LENGTH, ZONE_LENGTH } from '../data/themes.ts';
 
 const mod = (a: number, n: number) => ((a % n) + n) % n;
 
+let first = 0; // the theme the start line is in: each run's map starts somewhere else (rules/track.ts setSeed)
+export const setFirstTheme = (i: number) => { first = i; };
+
 /** Theme index for a point `d` meters down the road (hard border, used for scenery and ground). */
-export const themeIndexAt = (d: number, count: number) => mod(Math.floor(d / ZONE_LENGTH), count);
+export const themeIndexAt = (d: number, count: number) => mod(Math.floor(d / ZONE_LENGTH) + first, count);
 
 /** Distance from `d` to the next theme border. */
 export const toNextBorder = (d: number) => ZONE_LENGTH - mod(d, ZONE_LENGTH);
@@ -23,5 +26,5 @@ export function themeBlend(d: number, count: number) {
     to = zone + 1;
     t = 0.5 - (ZONE_LENGTH - into) / TRANSITION_LENGTH;
   }
-  return { from: mod(from, count), to: mod(to, count), t: t * t * (3 - 2 * t) };
+  return { from: mod(from + first, count), to: mod(to + first, count), t: t * t * (3 - 2 * t) };
 }

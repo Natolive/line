@@ -46,6 +46,7 @@ export const TRAFFIC = {
   headwaySec: 1.3,
   accel: 2.2,
   brake: 7,
+  curveAccel: 3, // m/s²: drivers slow down for bends that would push them sideways harder than this
 };
 
 export const NEAR_MISS = { gap: 1.0, minSpeed: 25, points: 250 };
@@ -78,6 +79,49 @@ export const WALL = {
   maxKmh: 260,
 };
 
-// Player-vs-player contact: a closing speed above this is a crash, below it a shove.
-export const BUMP = { crashKmh: 45, push: 4 }; // push: sideways m/s given on contact
 
+// The road's shape (rules/track.ts): a chain of pieces, each straight or one bend eased in and out.
+export const TRACK = {
+  piece: 500, // m per piece
+  transition: 150, // m of easing (clothoid: curvature grows linearly) at each end of a bend
+  step: 5, // m between stored samples of the road's heading and position
+  straightStart: 500, // m straight from the start line: the grid and the garage sit there
+};
+
+// Beside the road: the land, tunnels, bridges and signs (rules/track.ts, world/road.ts, world/terrain.ts).
+export const ROADSIDE = {
+  corridor: 16, // m from the centre line: road, shoulders and verge; the landscape starts beyond
+  zoneMargin: 380, // m from a zone border inside which no tunnel or bridge starts (the landscape blends there)
+  structureGap: 300, // m between two tunnels or bridges, room for their approaches
+  tunnelLength: [250, 900] as [min: number, max: number], // m
+  tunnelHalf: 10.6, // m from the centre to a tunnel wall
+  tunnelHeight: 7.8, // m to the crown of the vault
+  tunnelFade: 40, // m over which daylight gives way to the tunnel lamps, at each portal
+  viaductLength: [140, 420] as [min: number, max: number], // m
+  viaductDepth: [16, 36] as [min: number, max: number], // m from the deck down to the valley floor
+  lakeLength: [600, 1100] as [min: number, max: number], // m of bridge over the lake
+  lakeWater: 3, // m from the deck down to the lake
+  overpassSlot: 300, // m between candidate spots for a bridge over the motorway
+  overpassClear: 6.3, // m under it (lorries are 4 m)
+  gantryEvery: 700, // m between sign gantries
+  chevronRadius: 900, // m: bends tighter than this get chevron signs on the outside
+};
+
+// Impacts (rules/impact.ts): judged on how hard each car is jolted (its change of speed), as crash tests are.
+export const IMPACT = {
+  restitution: 0.2, // share of the closing speed that bounces back (cars crumple)
+  railRestitution: 0.3,
+  scratchKmh: 6, // km/h of jolt below which a touch only scrapes paint
+  wreckKmh: 32, // km/h of jolt that wrecks the car outright (≈ a 55 km/h rear-end into an equal car)
+  railWreckKmh: 45, // rails give: a harder jolt is needed against them
+  damageAtWreck: 90, // % of damage from a jolt just under the wreck threshold (it grows with the square of the jolt)
+  scrapePerSec: 2, // % of damage per second grinding along a rail at 100 km/h (more when faster)
+  smokeAt: 50, // %: the engine starts smoking
+  limpAt: 75, // %: it loses power and pulls to one side
+  limpPower: 0.45, // share of power left at 100 %
+  limpPull: 0.07, // steering pull at 100 % (share of full lock)
+  slipGrip: 0.8, // × the car's grip: how fast tyres soak up a sideways shove
+  spinDamp: 3, // 1/s: how fast a knock's spin dies out
+  massPerM2: 160, // kg per m² of footprint, for cars and lorries alike (a car ≈ 1.4 t, a lorry ≈ 4×)
+  shakenTime: 2.5, // s a traffic driver brakes, hazards on, after being hit
+};

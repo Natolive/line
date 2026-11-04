@@ -1,0 +1,190 @@
+// The land around the road (heights from rules/terrain.ts), in 80 m pieces kept built well past the fog
+// ahead and behind: hills, mountains with snow on top, rock on steep slopes, lakes and rivers.
+import * as THREE from 'three';
+import { ROADSIDE } from '../core/config.ts';
+import { THEMES, ZONE_LENGTH, type Theme } from '../data/themes.ts';
+import { floorHeight, smooth, terrainHeight, waterLevel } from '../rules/terrain.ts';
+import { themeIndexAt } from '../rules/themes.ts';
+import { overpassesIn, rowsIn, structuresIn } from '../rules/track.ts';
+import type { World } from './assets.ts';
+import { Mesher } from './mesher.ts';
+import { PieceFrame, Ring, type TrackView } from './track.ts';
+
+const LEN = 80, ROW = 4, TILE = 12, PERIOD = 1200; // m; texture v restarts every PERIOD m (a whole number of tiles and pieces)
+const C = ROADSIDE.corridor;
+// columns from the corridor out to past the fog, denser near the road
+const XS = [C, 20, 25, 31, 38, 47, 58, 72, 90, 112, 140, 175, 220, 275, 345, 430, 540, 680, 850, 1060, 1320, 1650];
+const BEHIND = 520, AHEAD = 1700;
+
+/** Texture v at road position `d` for a piece starting at `d0` (continuous from piece to piece). */
+export const texV = (d0: number, d: number) => (((d0 % PERIOD) + PERIOD) % PERIOD) + d - d0;
+
+/**
+ * Which two themes a piece starting at `d0` blends between, and how far each point has gone into the second
+ * (an 80 m crossfade centred on the zone border).
+ */
+export function themePair(d0: number) {
+  const z = Math.floor((d0 - 40) / ZONE_LENGTH), border = (z + 1) * ZONE_LENGTH;
+  const a = THEMES[themeIndexAt(z * ZONE_LENGTH, THEMES.length)], b = THEMES[themeIndexAt(border, THEMES.length)];
+  return { a, b, blend: (d: number) => smooth(border - 40, border + 40, d) };
+}
+
+const materials = new Map<string, THREE.MeshStandardMaterial>();
+/** Land material between themes `a` and `b`: their ground, rock where it is steep, snow above the snow line. */
+export function landMaterial(world: World, a: Theme, b: Theme) {
+  const key = `${a.id}>${b.id}`;
+  let m = materials.get(key);
+  if (m) return m;
+  const s = world.surfaces;
+  const u = {
+    groundB: { value: s[b.ground].map }, rockA: { value: s[a.rock].map }, rockB: { value: s[b.rock].map }, snowMap: { value: s.snow_02.map },
+    tintA: { value: new THREE.Color(a.groundTint) }, tintB: { value: new THREE.Color(b.groundTint) },
+    rockTintA: { value: new THREE.Color(a.rockTint) }, rockTintB: { value: new THREE.Color(b.rockTint) },
+    snowA: { value: a.snowLine }, snowB: { value: b.snowLine },
+  };
+  // pushed back in depth so the road and verges laid over it always win
+  m = new THREE.MeshStandardMaterial({ map: s[a.ground].map, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, u);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float blend;\nvarying float vBlend, vUp, vH;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBlend = blend; vUp = normal.y; vH = position.y;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D groundB, rockA, rockB, snowMap;
+        uniform vec3 tintA, tintB, rockTintA, rockTintB;
+        uniform float snowA, snowB;
+        varying float vBlend, vUp, vH;`)
+      .replace('#include <map_fragment>', `
+        vec2 tuv = vMapUv;
+        // each texture at two scales, the larger one turned: no visible tiling grid
+        vec2 big = mat2(0.8, 0.6, -0.6, 0.8) * tuv * 0.21;
+        float macro = texture2D(map, tuv * 0.0613).g;
+        float steep = smoothstep(0.84, 0.64, vUp); // rock on slopes steeper than ~35°
+        vec3 ga = 0.5 * (texture2D(map, tuv).rgb + texture2D(map, big).rgb), gb = 0.5 * (texture2D(groundB, tuv).rgb + texture2D(groundB, big).rgb);
+        vec3 ra = 0.5 * (texture2D(rockA, tuv * 0.5).rgb + texture2D(rockA, big * 0.6).rgb), rb = 0.5 * (texture2D(rockB, tuv * 0.5).rgb + texture2D(rockB, big * 0.6).rgb);
+        vec3 a = mix(ga * tintA, ra * rockTintA, steep);
+        vec3 b = mix(gb * tintB, rb * rockTintB, steep);
+        float line = mix(snowA, snowB, vBlend);
+        float snow = smoothstep(line, line + 25.0, vH) * smoothstep(0.5, 0.75, vUp);
+        vec3 col = mix(mix(a, b, vBlend), texture2D(snowMap, tuv * 0.7).rgb * 1.15, snow);
+        diffuseColor.rgb *= col * (0.8 + 0.4 * macro);`);
+  };
+  m.customProgramCacheKey = () => 'land';
+  materials.set(key, m);
+  return m;
+}
+
+/** Gently rippling water: a procedural normal map, scrolled over time. */
+function waterMaterial() {
+  const n = 256, canvas = document.createElement('canvas');
+  canvas.width = canvas.height = n;
+  const g = canvas.getContext('2d')!, img = g.createImageData(n, n);
+  const waves = Array.from({ length: 10 }, (_, i) => ({ kx: Math.round(Math.cos(i * 2.4) * (2 + i)), ky: Math.round(Math.sin(i * 2.4) * (2 + i)), a: 0.5 / (1 + i * 0.4), p: i * 1.7 }));
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      let dx = 0, dy = 0;
+      for (const w of waves) {
+        const c = Math.cos(((w.kx * x + w.ky * y) / n) * 2 * Math.PI + w.p) * w.a;
+        dx += c * w.kx * 0.05;
+        dy += c * w.ky * 0.05;
+      }
+      const i = (y * n + x) * 4;
+      img.data.set([128 + dx * 127, 128 + dy * 127, 255, 255], i);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const normalMap = new THREE.CanvasTexture(canvas);
+  normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
+  return new THREE.MeshStandardMaterial({ color: 0x1e3b44, roughness: 0.06, metalness: 0.2, normalMap, normalScale: new THREE.Vector2(0.35, 0.35) });
+}
+
+type Piece = { group: THREE.Group; geos: THREE.BufferGeometry[] };
+
+export class Terrain {
+  private ring: Ring<Piece>;
+  private water = waterMaterial();
+  private asphalt: THREE.Material;
+
+  constructor(track: TrackView, world: World, asphalt: THREE.Material) {
+    this.asphalt = asphalt;
+    this.ring = new Ring<Piece>(LEN, BEHIND, AHEAD, (d0) => {
+      const p = this.build(world, d0);
+      track.place(p.group, d0, 0);
+      track.root.add(p.group);
+      return p;
+    }, (p) => {
+      track.root.remove(p.group);
+      for (const g of p.geos) g.dispose();
+    });
+  }
+
+  /** Drops every piece, to be built again (a new map). */
+  clear() {
+    this.ring.clear();
+  }
+
+  update(d: number, dt = 0) {
+    this.ring.update(d);
+    this.water.normalMap!.offset.x += dt * 0.004;
+    this.water.normalMap!.offset.y += dt * 0.006;
+  }
+
+  private build(world: World, d0: number): Piece {
+    const pf = new PieceFrame(d0), d1 = d0 + LEN, ds = rowsIn(d0, d1, ROW);
+    const { a, b, blend } = themePair(d0), group = new THREE.Group(), geos: THREE.BufferGeometry[] = [];
+    const add = (m: Mesher, mat: THREE.Material, shadow = true) => {
+      if (m.empty) return;
+      const g = m.geometry(), mesh = new THREE.Mesh(g, mat);
+      mesh.receiveShadow = shadow;
+      group.add(mesh);
+      geos.push(g);
+    };
+
+    const land = new Mesher(pf), e = 1.5;
+    for (const side of [-1, 1]) {
+      const xs = side < 0 ? XS.map((x) => -x).reverse() : XS;
+      for (const d of ds) {
+        for (const x of xs) {
+          land.vertex(d, x, terrainHeight(d, x), x / TILE, texV(d0, d) / TILE, blend(d));
+          const hx = (terrainHeight(d, x + e) - terrainHeight(d, x - e)) / (2 * e), hd = (terrainHeight(d + e, x) - terrainHeight(d - e, x)) / (2 * e);
+          land.normal(-hx, 1, -hd, d);
+        }
+      }
+      land.grid(ds.length, xs.length);
+    }
+    const near = structuresIn(d0 - 300, d1 + 300);
+    // under bridges you can see the ground beneath the road
+    if (near.some((s) => s.kind !== 'tunnel')) {
+      for (const d of ds) {
+        for (const x of [-C - 0.5, 0, C + 0.5]) {
+          land.vertex(d, x, floorHeight(d), x / TILE, texV(d0, d) / TILE, blend(d));
+          land.normal(0, 1, 0, d);
+        }
+      }
+      land.grid(ds.length, 3);
+    }
+    add(land, landMaterial(world, a, b));
+
+    const water = new Mesher(pf), wet = near.find((s) => s.water);
+    if (wet) {
+      const y = waterLevel(wet), xs = [-1650, -600, -200, -C, 0, C, 200, 600, 1650];
+      for (const d of [d0, d0 + LEN / 2, d1]) for (const x of xs) water.vertex(d, x, y, x / 40, texV(d0, d) / 40);
+      water.grid(3, xs.length);
+    }
+    add(water, this.water);
+
+    // the local roads that cross on overpasses run on along their embankments
+    const lane = new Mesher(pf);
+    for (const o of overpassesIn(d0, d1)) {
+      for (const side of [-1, 1]) {
+        const xs: number[] = [];
+        for (let x = C + 8; x <= 420; x += 10) xs.push(side * x);
+        for (const x of xs) for (const dd of side > 0 ? [4.5, -4.5] : [-4.5, 4.5]) lane.vertex(o + dd, x, terrainHeight(o, x) + 0.08, dd / 6, x / 6);
+        lane.grid(xs.length, 2);
+      }
+    }
+    add(lane, this.asphalt);
+    return { group, geos };
+  }
+}

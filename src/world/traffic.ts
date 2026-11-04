@@ -1,12 +1,14 @@
 // Traffic AI: keeps a safe distance, brakes (with brake lights), signals, then changes lanes.
 // Positions are along the road (`d`, meters from the start), so the same traffic can be shared online:
 // one game simulates it ('local': solo, or the room host) and the others mirror it ('remote').
-import type * as THREE from 'three';
-import { LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, SHOULDER, TRAFFIC as T } from '../core/config.ts';
+import { CARRIAGEWAY_HALF, IMPACT, LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, SHOULDER, TRAFFIC as T } from '../core/config.ts';
 import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { TrafficCar } from '../net/protocol.ts';
 import { rectsOverlap, type Rect } from '../rules/collision.ts';
 import { densityAt, onShoulder } from '../rules/difficulty.ts';
+import { massOf, type Moving } from '../rules/impact.ts';
+import { curvatureAt } from '../rules/track.ts';
+import type { TrackView } from './track.ts';
 import type { Fleet } from './vehicles/fleet.ts';
 import { setBlinker, setBrakeLights } from './vehicles/lights.ts';
 import { spawn, spinWheels, type Prefab, type Vehicle } from './vehicles/prefab.ts';
@@ -28,7 +30,10 @@ type Car = {
   target: number;
   x: number;
   d: number;
+  yaw: number; // rad from the road's direction, + = right (changing lanes)
   speed: number;
+  knock: number; // m/s sideways from a knock, dying out
+  shaken: number; // s left braking with hazards on after being hit
   desired: number;
   blink: number; // seconds of signalling left before moving over
   heavy: boolean;
@@ -47,7 +52,8 @@ export type Driver = { d: number; x: number; speed: number; rect: Rect };
 export class Traffic {
   remote = false; // true: mirror the host's traffic instead of simulating it
   netNow = 0; // server time (ms) now: mirrored traffic is drawn where it is at that time (predicted)
-  private scene: THREE.Scene;
+  private scene: TrackView['root'];
+  private track: TrackView;
   private models: Prefab[];
   private heavyFrom: number;
   private cars: Car[] = [];
@@ -55,17 +61,16 @@ export class Traffic {
   private nextId = 1;
   private nextBreakdown = [0, 0]; // road position of the next broken-down car, left and right shoulder
   private queued = [0, 0]; // cars already queued for whoever is riding that shoulder
-  private viewD = 0; // road position of the local player: everything is drawn relative to it
 
-  constructor(scene: THREE.Scene, fleet: Fleet) {
-    this.scene = scene;
+  constructor(track: TrackView, fleet: Fleet) {
+    this.track = track;
+    this.scene = track.root;
     this.models = [...fleet.cars, ...fleet.heavy];
     this.heavyFrom = fleet.cars.length;
   }
 
   /** Clears the road and pre-fills it ahead of `me`. */
   reset(me: Driver) {
-    this.viewD = me.d;
     for (const c of this.cars) this.scene.remove(c.v.mesh);
     this.cars = [];
     if (this.remote) return;
@@ -80,7 +85,6 @@ export class Traffic {
    */
   update(dt: number, me: Driver, others: Driver[], km: number, meRacing = true) {
     this.clock += dt;
-    this.viewD = me.d;
     const drivers = meRacing ? [me, ...others] : others;
     let nearMisses = 0;
 
@@ -99,10 +103,10 @@ export class Traffic {
         if (gap > 0 && gap < NEAR_MISS.gap && me.speed > NEAR_MISS.minSpeed) nearMisses++;
       }
       const lateral = LANES[c.target] - c.x;
-      c.v.mesh.position.set(c.x, 0, me.d - c.d);
-      if (!this.remote) c.v.mesh.rotation.y = c.target !== c.lane && c.blink <= 0 ? -Math.sign(lateral) * Math.atan(T.laneChangeSpeed / Math.max(c.speed, 1)) : 0;
+      if (!this.remote) c.yaw = c.target !== c.lane && c.blink <= 0 ? Math.sign(lateral) * Math.atan(T.laneChangeSpeed / Math.max(c.speed, 1)) : 0;
+      this.track.place(c.v.mesh, c.d, c.x, c.yaw);
       spinWheels(c.v, c.speed * dt);
-      setBlinker(c.v, c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, this.clock % 0.8 < 0.4, parked(c));
+      setBlinker(c.v, c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, this.clock % 0.8 < 0.4, parked(c) || c.shaken > 0);
     }
     if (this.remote) return nearMisses;
 
@@ -141,11 +145,33 @@ export class Traffic {
     return this.cars.find((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d)));
   }
 
+  /** Every traffic car `me` touches, as impacts see them (relative to `me`'s road position). Broken-down cars don't budge. */
+  touching(me: Driver): { car: Car; moving: Moving }[] {
+    return this.cars.filter((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d))).map((c) => {
+      const lateral = c.target !== c.lane && c.blink <= 0 ? Math.sign(LANES[c.target] - c.x) * T.laneChangeSpeed : 0;
+      return { car: c, moving: { rect: this.rectOf(c, me.d), vx: lateral + c.knock, vz: -c.speed, mass: parked(c) ? 1e9 : massOf(c.v.w, c.v.l) } };
+    });
+  }
+
+  /**
+   * A traffic car knocked by the player: `dv` its change of velocity (x right, z back), pushed `push` meters
+   * (x, z) out of the overlap. Its driver brakes, hazards on, and steers back into a lane. Only the game that
+   * simulates the traffic moves it; mirrors get it from the host.
+   */
+  knock(c: Car, dv: [number, number], push: [number, number], jolt: number) {
+    if (this.remote || parked(c)) return;
+    c.speed = Math.max(0, c.speed - dv[1]);
+    c.knock += dv[0];
+    c.x += push[0];
+    c.d -= push[1];
+    if (jolt > IMPACT.scratchKmh) c.shaken = IMPACT.shakenTime;
+  }
+
   /** What the host sends to the other players. */
   snapshot(): TrafficCar[] {
     return this.cars.map((c) => ({
       id: c.id, model: c.model, heavy: c.heavy, d: Math.round(c.d * 100) / 100, x: Math.round(c.x * 100) / 100,
-      speed: Math.round(c.speed * 10) / 10, brake: c.braking, blink: c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, yaw: c.v.mesh.rotation.y,
+      speed: Math.round(c.speed * 10) / 10, brake: c.braking, blink: c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, yaw: -c.yaw,
     }));
   }
 
@@ -178,18 +204,25 @@ export class Traffic {
     const s = present(c.track, this.netNow, dt);
     if (!s) return;
     Object.assign(c, { d: s.d, x: s.x, speed: s.speed });
-    c.v.mesh.rotation.y = -s.heading;
+    c.yaw = s.heading;
     c.lane = LANES.reduce((best, lx, i) => (Math.abs(lx - c.x) < Math.abs(LANES[best] - c.x) ? i : best), 0);
   }
 
   private rectOf(c: Car, meD: number): Rect {
-    return { x: c.x, z: meD - c.d, w: c.v.w, l: c.v.l, heading: -c.v.mesh.rotation.y };
+    return { x: c.x, z: meD - c.d, w: c.v.w, l: c.v.l, heading: c.yaw };
   }
 
   private drive(c: Car, dt: number, drivers: Driver[]) {
     // car-following: match the speed of whoever is ahead if we're inside our safe headway
     const lead = this.leader(c, drivers);
     let want = c.desired;
+    // drivers ease off for a bend ahead that would throw them sideways too hard
+    const bend = Math.max(Math.abs(curvatureAt(c.d)), Math.abs(curvatureAt(c.d + 120)));
+    if (bend > 0) want = Math.min(want, Math.sqrt(T.curveAccel / bend));
+    if (c.shaken > 0) {
+      c.shaken -= dt;
+      want = Math.min(want, c.desired * 0.5); // just been hit: slows right down
+    }
     if (lead && lead.gap < T.minGap + c.speed * T.headwaySec) want = Math.min(want, lead.speed * (lead.gap < T.minGap ? 0.8 : 1));
     const before = c.speed;
     c.braking = c.speed > want + 0.3;
@@ -197,6 +230,20 @@ export class Traffic {
     setBrakeLights(c.v, c.braking);
     c.suspension.update(c.v.body, dt, (c.speed - before) / dt, 0, c.speed * dt);
 
+    // knocked sideways: the shove dies out, then the driver steers back to the middle of the nearest lane
+    if (c.knock !== 0) {
+      const edge = CARRIAGEWAY_HALF - c.v.w / 2; // shoved, but kept on the carriageway (the shoulder is for broken-down cars)
+      c.x = Math.max(-edge, Math.min(edge, c.x + c.knock * dt));
+      c.knock -= Math.sign(c.knock) * Math.min(Math.abs(c.knock), 6 * dt);
+      c.lane = c.target = LANES.reduce((best, lx, i) => (Math.abs(lx - c.x) < Math.abs(LANES[best] - c.x) ? i : best), 0);
+      c.blink = 0;
+      return;
+    }
+    if (c.target === c.lane && Math.abs(LANES[c.lane] - c.x) > 0.01) {
+      const dx = LANES[c.lane] - c.x;
+      c.x += Math.sign(dx) * Math.min(Math.abs(dx), T.laneChangeSpeed * dt);
+      return;
+    }
     // lane changes: signal first, then drift over
     if (c.target === c.lane) {
       const stuck = !!lead && lead.gap < 50 && lead.speed < c.desired - 2;
@@ -260,10 +307,10 @@ export class Traffic {
   private add(model: number, d: number, x: number, speed: number, heavy: boolean, id = this.nextId++): Car {
     const v = spawn(this.models[model]);
     setBrakeLights(v, false);
-    v.mesh.position.set(x, 0, this.viewD - d); // in place right away, not only from the next frame
+    this.track.place(v.mesh, d, x); // in place right away, not only from the next frame
     this.scene.add(v.mesh);
     const lane = LANES.reduce((best, lx, i) => (Math.abs(lx - x) < Math.abs(LANES[best] - x) ? i : best), 0);
-    const car: Car = { id, model, v, lane, target: lane, x, d, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
+    const car: Car = { id, model, v, lane, target: lane, x, d, yaw: 0, knock: 0, shaken: 0, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
     this.cars.push(car);
     return car;
   }

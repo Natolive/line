@@ -1,57 +1,57 @@
-// The endless motorway. The car never moves forward: textures and roadside objects scroll toward it.
+// The motorway, built in 80 m pieces along its curve (rules/track.ts) and kept built from behind the
+// rear-view mirror's reach to past the fog: asphalt, markings, rails, verges, and whatever the road runs
+// through or under: tunnels, viaducts, the lake bridge, overpasses, sign gantries, chevrons, noise walls.
 import * as THREE from 'three';
-import { CARRIAGEWAY_HALF, GUARDRAIL_X, LANE_WIDTH, LANES } from '../core/config.ts';
-import { THEMES, type Theme } from '../data/themes.ts';
+import { CARRIAGEWAY_HALF, GUARDRAIL_X, LANE_WIDTH, LANES, ROADSIDE } from '../core/config.ts';
+import { THEMES } from '../data/themes.ts';
+import { floorHeight, terrainHeight, waterLevel } from '../rules/terrain.ts';
 import { themeIndexAt, toNextBorder } from '../rules/themes.ts';
-import type { Surface, World } from './assets.ts';
+import { curvatureAt, gantriesIn, hash, overpassesIn, rowsIn, structureAt, structuresIn, type Structure } from '../rules/track.ts';
+import type { World } from './assets.ts';
+import { Mesher, type Profile } from './mesher.ts';
+import { landMaterial, texV, themePair } from './terrain.ts';
+import { PieceFrame, Ring, type TrackView } from './track.ts';
 
-export const WRAP_Z = 30; // behind the camera: things that pass it wrap to the far end
-const LOOP = 240; // lane dashes and rail posts repeat every LOOP meters
-const ROAD_W = GUARDRAIL_X * 2 + 1;
-const ROAD_LEN = 800;
-const ASPHALT_TILE = 6, GROUND_TILE = 12, GROUND_SIZE = 4000;
+const LEN = 80, ROW = 4, BEHIND = 420, AHEAD = 1500;
+const RH = GUARDRAIL_X + 0.5; // half width of the asphalt, out past the rails
+const C = ROADSIDE.corridor, TH = ROADSIDE.tunnelHalf, VAULT = 4.6; // m: walls rise straight to VAULT, then arch to tunnelHeight
+const DECK = 1.6; // m, depth of a bridge deck
+const ASPHALT_TILE = 6, LAND_TILE = 12, CONCRETE_TILE = 4;
 
-type Item = { p: THREE.Vector3; s: THREE.Vector3; r: number };
-/** Many copies of one mesh that scroll and wrap, drawn in a single call. */
-class Strip {
-  readonly mesh: THREE.InstancedMesh;
-  private items: Item[];
-  private m = new THREE.Matrix4();
-  private q = new THREE.Quaternion();
+type Mode = 'open' | 'tunnel' | 'bridge';
+const modeOf = (s: Structure | null): Mode => (!s ? 'open' : s.kind === 'tunnel' ? 'tunnel' : 'bridge');
 
-  constructor(geo: THREE.BufferGeometry, mat: THREE.Material, items: Item[]) {
-    this.items = items;
-    this.mesh = new THREE.InstancedMesh(geo, mat, items.length);
-    this.mesh.castShadow = this.mesh.receiveShadow = true;
-    this.mesh.frustumCulled = false; // instances span the whole strip
-    this.update(0);
-  }
+/** Box cross-section, traced so its faces point outward. */
+const box = (xl: number, xr: number, yb: number, yt: number): Profile => [[xl, yt], [xr, yt], [xr, yb], [xl, yb], [xl, yt]];
 
-  update(dz: number) {
-    this.items.forEach((it, i) => {
-      it.p.z += dz;
-      if (it.p.z > WRAP_Z) it.p.z -= LOOP;
-      this.mesh.setMatrixAt(i, this.m.compose(it.p, this.q, it.s));
-    });
-    this.mesh.instanceMatrix.needsUpdate = true;
-  }
-}
+/** Inside of the tunnel: floor stubs, walls and vault, traced so every face looks into the tube. */
+const VAULT_PROFILE: Profile = [
+  [RH, 0], [TH, 0], [TH, VAULT],
+  ...Array.from({ length: 11 }, (_, i): [number, number] => {
+    const a = (Math.PI * (i + 1)) / 12;
+    return [TH * Math.cos(a), VAULT + (ROADSIDE.tunnelHeight - VAULT) * Math.sin(a)];
+  }),
+  [-TH, VAULT], [-TH, 0], [-RH, 0],
+];
 
-const GANTRY_EVERY = 700;
-
-/** A motorway sign panel whose face is drawn on a canvas. */
-function signPanel(w: number, h: number) {
+/** A canvas-faced sign: a face that glows faintly by day, like retroreflective sheeting at night. */
+function canvasMaterial(w: number, h: number) {
   const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = Math.round((512 * h) / w);
+  canvas.width = w;
+  canvas.height = h;
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 8;
-  // emissive = its own face, faint by day; at night it glows like retroreflective sheeting
   const mat = new THREE.MeshStandardMaterial({ map, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: 0.08, roughness: 0.6 });
+  return { mat, map, g: canvas.getContext('2d')! };
+}
+
+/** A motorway sign panel whose face is drawn on a canvas. */
+function signPanel(w: number, h: number) {
+  const { mat, map, g } = canvasMaterial(512, Math.round((512 * h) / w));
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
   const draw = (big: string, small: string) => {
-    const g = canvas.getContext('2d')!, W = canvas.width, H = canvas.height;
+    const W = g.canvas.width, H = g.canvas.height;
     g.fillStyle = '#0b5d3b';
     g.fillRect(0, 0, W, H);
     g.strokeStyle = '#f2f2f2';
@@ -89,139 +89,272 @@ function gantry(steel: THREE.Material) {
   group.traverse((o) => { o.castShadow = true; });
   return { group, next, mats: [next.mat, road.mat] };
 }
+type Gantry = ReturnType<typeof gantry>;
 
-const range = (from: number, to: number, step: number) => Array.from({ length: Math.ceil((to - from) / step) }, (_, i) => from + i * step);
-const v3 = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
-
-/** Gives a surface its own copy of the textures, tiled every `tile` meters over a w x h plane. */
-function tiled(s: Surface, w: number, h: number, tile: number) {
-  const copy = (t: THREE.Texture) => {
-    const c = t.clone();
-    c.repeat.set(w / tile, h / tile);
-    c.needsUpdate = true;
-    return c;
-  };
-  return { map: copy(s.map), normalMap: copy(s.normalMap), roughnessMap: copy(s.roughnessMap) };
+/** Red chevron board (bend ahead), arrows pointing right; mirrored by its texture for left bends. */
+function chevronMaterials() {
+  const { mat, map, g } = canvasMaterial(256, 256);
+  g.fillStyle = '#c8102e';
+  g.fillRect(0, 0, 256, 256);
+  g.fillStyle = '#ffffff';
+  for (const x of [40, 130]) {
+    g.beginPath();
+    g.moveTo(x, 40);
+    g.lineTo(x + 50, 40);
+    g.lineTo(x + 110, 128);
+    g.lineTo(x + 50, 216);
+    g.lineTo(x, 216);
+    g.lineTo(x + 60, 128);
+    g.closePath();
+    g.fill();
+  }
+  map.needsUpdate = true;
+  const leftMap = map.clone();
+  leftMap.repeat.x = -1;
+  leftMap.offset.x = 1;
+  leftMap.wrapS = THREE.RepeatWrapping;
+  const left = mat.clone();
+  left.map = left.emissiveMap = leftMap;
+  return { right: mat, left };
 }
 
-/**
- * Ground that shows the current theme up to a border line and the next theme beyond it, with a soft
- * 80 m blend. The border moves toward the player as they drive, so a new landscape rolls in.
- */
-function blendedGround(world: World) {
-  const grounds = Object.fromEntries(Object.entries(world.surfaces).map(([id, s]) => [id, tiled(s, GROUND_SIZE, GROUND_SIZE, GROUND_TILE).map]));
-  const border = { value: -10000 }, next = { value: Object.values(grounds)[0] };
-  const tintA = { value: new THREE.Color() }, tintB = { value: new THREE.Color() };
-  // pushed back in depth so the road, 1 cm above it, always wins (no grass flickering through the asphalt)
-  const mat = new THREE.MeshStandardMaterial({ map: next.value, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
-  mat.onBeforeCompile = (shader) => {
-    shader.uniforms.nextMap = next;
-    shader.uniforms.border = border;
-    shader.uniforms.tintA = tintA;
-    shader.uniforms.tintB = tintB;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying float vWorldZ;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldZ = (modelMatrix * vec4(transformed, 1.0)).z;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform sampler2D nextMap;\nuniform float border;\nuniform vec3 tintA, tintB;\nvarying float vWorldZ;')
-      .replace(
-        '#include <map_fragment>',
-        `float beyond = smoothstep(border + 40.0, border - 40.0, vWorldZ); // ahead of the border = next theme
-         diffuseColor.rgb *= mix(texture2D(map, vMapUv).rgb * tintA, texture2D(nextMap, vMapUv).rgb * tintB, beyond);`,
-      );
-  };
-  return { mat, grounds, border, next, tintA, tintB };
-}
+type Piece = { group: THREE.Group; geos: THREE.BufferGeometry[]; gantries: Gantry[] };
 
 export class Road {
-  private asphalt: ReturnType<typeof tiled>;
-  private ground: ReturnType<typeof blendedGround>;
-  private strips: Strip[] = [];
-  private gantries: ReturnType<typeof gantry>[] = [];
+  private ring: Ring<Piece>;
+  private world: World;
+  readonly asphalt: THREE.MeshStandardMaterial;
+  private paint = new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  private metal = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0.85, roughness: 0.35 });
+  private steel = new THREE.MeshStandardMaterial({ color: 0x8d9299, metalness: 0.7, roughness: 0.45 });
+  private concrete: THREE.MeshStandardMaterial;
+  private headwall: THREE.MeshStandardMaterial;
+  private lamp = new THREE.MeshStandardMaterial({ color: 0xffe2b0, emissive: 0xffc070, emissiveIntensity: 3 });
+  private chevron = chevronMaterials();
+  private sign = new THREE.PlaneGeometry(1.1, 1.1);
+  private signPost = new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6).translate(0, 0.8, 0);
+  private spare: Gantry[] = [];
+  private live = new Set<Gantry>();
+  private night = 0;
 
-  constructor(scene: THREE.Scene, world: World) {
-    const flat = (w: number, len: number, mat: THREE.Material, x: number, y: number) => {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, len), mat);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(x, y, WRAP_Z - len / 2);
-      m.receiveShadow = true;
-      scene.add(m);
-    };
-    this.ground = blendedGround(world);
-    flat(GROUND_SIZE, GROUND_SIZE, this.ground.mat, 0, 0);
-    this.asphalt = tiled(world.surfaces.asphalt_02, ROAD_W, ROAD_LEN, ASPHALT_TILE);
-    flat(ROAD_W, ROAD_LEN, new THREE.MeshStandardMaterial({ ...this.asphalt, color: 0x9a9a9a }), 0, 0.01);
-
-    const paintMat = new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2 });
-    for (const s of [-1, 1]) flat(0.2, ROAD_LEN, paintMat, s * (CARRIAGEWAY_HALF + 0.1), 0.02);
-
-    const metal = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0.85, roughness: 0.35 });
-    for (const s of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.34, ROAD_LEN), metal);
-      rail.position.set(s * GUARDRAIL_X, 0.62, WRAP_Z - ROAD_LEN / 2);
-      rail.castShadow = rail.receiveShadow = true;
-      scene.add(rail);
-    }
-
-    const start = WRAP_Z - LOOP;
-    // dashed lane lines: 3 m paint, 9 m gap (12 m period)
-    const dividers = LANES.slice(1).map((x) => x - LANE_WIDTH / 2);
-    const dash = new THREE.PlaneGeometry(0.15, 3).rotateX(-Math.PI / 2);
-    this.add(scene, new Strip(dash, paintMat, dividers.flatMap((x) => range(start, WRAP_Z, 12).map((z) => ({ p: v3(x, 0.02, z), s: v3(1, 1, 1), r: 0 })))));
-    const post = new THREE.BoxGeometry(0.12, 0.7, 0.12);
-    this.add(scene, new Strip(post, metal, [-1, 1].flatMap((s) => range(start, WRAP_Z, 4).map((z) => ({ p: v3(s * (GUARDRAIL_X + 0.1), 0.35, z), s: v3(1, 1, 1), r: 0 })))));
-
-    // sign gantries: a strong cue for speed, and they tell you what's coming
-    const steel = new THREE.MeshStandardMaterial({ color: 0x8d9299, metalness: 0.7, roughness: 0.45 });
-    for (const z of [-250, -250 - GANTRY_EVERY / 2]) {
-      const g = gantry(steel);
-      g.group.position.z = z;
-      scene.add(g.group);
-      this.gantries.push(g);
-    }
+  constructor(track: TrackView, world: World) {
+    this.world = world;
+    const s = world.surfaces;
+    this.asphalt = new THREE.MeshStandardMaterial({ map: s.asphalt_02.map, normalMap: s.asphalt_02.normalMap, roughnessMap: s.asphalt_02.roughnessMap, color: 0x9a9a9a });
+    this.concrete = new THREE.MeshStandardMaterial({ map: s.concrete_wall_008.map, normalMap: s.concrete_wall_008.normalMap, roughnessMap: s.concrete_wall_008.roughnessMap, color: 0xc9c6bf });
+    this.headwall = this.concrete.clone();
+    this.headwall.side = THREE.DoubleSide; // seen from the approach and, through the mouth, from inside
+    this.ring = new Ring<Piece>(LEN, BEHIND, AHEAD, (d0) => {
+      const p = this.build(d0);
+      track.place(p.group, d0, 0);
+      track.root.add(p.group);
+      return p;
+    }, (p) => {
+      track.root.remove(p.group);
+      for (const g of p.geos) g.dispose();
+      for (const g of p.gantries) {
+        this.live.delete(g);
+        this.spare.push(g);
+      }
+    });
   }
 
-  private add(scene: THREE.Scene, s: Strip) {
-    scene.add(s.mesh);
-    this.strips.push(s);
+  update(d: number) {
+    this.ring.update(d);
   }
 
-  /** Ground: theme `current` up to `borderZ` (world z of the next theme border), `next` beyond it. */
-  setGround(current: Theme, next: Theme, borderZ: number) {
-    const g = this.ground;
-    g.mat.map = g.grounds[current.ground];
-    g.next.value = g.grounds[next.ground];
-    g.tintA.value.set(current.groundTint);
-    g.tintB.value.set(next.groundTint);
-    g.border.value = borderZ;
-  }
-
-  /** Rewrites every sign for a run starting at road distance `dist`. */
-  reset(dist: number) {
-    for (const g of this.gantries) this.label(g, dist - g.group.position.z);
+  /** Drops every piece, to be built again (a new map). */
+  clear() {
+    this.ring.clear();
   }
 
   /** 0 = day, 1 = night. */
   setNight(n: number) {
-    for (const g of this.gantries) for (const m of g.mats) m.emissiveIntensity = 0.08 + n * 0.55;
+    this.night = n;
+    for (const g of this.live) for (const m of g.mats) m.emissiveIntensity = 0.08 + n * 0.55;
+    this.chevron.left.emissiveIntensity = this.chevron.right.emissiveIntensity = 0.1 + n * 0.6;
   }
 
-  update(dz: number, dist: number) {
-    for (const t of Object.values(this.asphalt)) t.offset.y += dz / ASPHALT_TILE;
-    for (const t of Object.values(this.ground.grounds)) t.offset.y += dz / GROUND_TILE;
-    for (const s of this.strips) s.update(dz);
-    for (const g of this.gantries) {
-      g.group.position.z += dz;
-      if (g.group.position.z > WRAP_Z) {
-        g.group.position.z -= GANTRY_EVERY;
-        this.label(g, dist - g.group.position.z);
+  private build(d0: number): Piece {
+    const pf = new PieceFrame(d0), d1 = d0 + LEN, ds = rowsIn(d0, d1, ROW);
+    const group = new THREE.Group(), geos: THREE.BufferGeometry[] = [], gantries: Gantry[] = [];
+    const meshers = new Map<THREE.Material, Mesher>();
+    const mesher = (mat: THREE.Material) => {
+      let m = meshers.get(mat);
+      if (!m) meshers.set(mat, (m = new Mesher(pf)));
+      return m;
+    };
+    const modes = ds.slice(0, -1).map((d, i) => modeOf(structureAt((d + ds[i + 1]) / 2)));
+    /** Rows of each stretch where `want(mode)` holds, as lists of road positions. */
+    const runs = (want: (m: Mode) => boolean) => {
+      const out: number[][] = [];
+      modes.forEach((m, i) => {
+        if (!want(m)) return;
+        if (i > 0 && want(modes[i - 1])) out[out.length - 1].push(ds[i + 1]);
+        else out.push([ds[i], ds[i + 1]]);
+      });
+      return out;
+    };
+    const v0 = (rows: number[]) => texV(d0, rows[0]);
+    const all = () => true;
+
+    // asphalt, edge lines, lane dashes (3 m paint, 9 m gap), rails and their posts: everywhere
+    for (const rows of runs(all)) {
+      mesher(this.asphalt).sweep(rows, () => [[-RH, 0], [RH, 0]], ASPHALT_TILE, v0(rows));
+      for (const s of [-1, 1]) {
+        const x = s * (CARRIAGEWAY_HALF + 0.1);
+        mesher(this.paint).sweep(rows, () => [[x - 0.1, 0.015], [x + 0.1, 0.015]], 1);
+        mesher(this.metal).sweepFlat(rows, () => box(s * GUARDRAIL_X - 0.04, s * GUARDRAIL_X + 0.04, 0.45, 0.79), 1);
       }
+    }
+    for (const x of LANES.slice(1).map((l) => l - LANE_WIDTH / 2)) {
+      for (let d = Math.floor(d0 / 12) * 12; d < d1; d += 12) {
+        const a = Math.max(d, d0), b = Math.min(d + 3, d1);
+        if (b > a) mesher(this.paint).sweep([a, b], () => [[x - 0.075, 0.015], [x + 0.075, 0.015]], 1);
+      }
+    }
+    const post = new THREE.BoxGeometry(0.12, 0.7, 0.12).translate(0, 0.35, 0);
+    for (let d = Math.ceil(d0 / 4) * 4; d < d1; d += 4) for (const s of [-1, 1]) this.solid(mesher(this.metal), post, d, s * (GUARDRAIL_X + 0.1), 0);
+
+    // verges in the open: from the road edge to where the land starts, as a cutting or an embankment
+    const { a, b, blend } = themePair(d0), land = landMaterial(this.world, a, b);
+    for (const rows of runs((m) => m === 'open')) {
+      const m = mesher(land);
+      for (const s of [-1, 1]) {
+        const pts = (d: number): Profile => {
+          const h = terrainHeight(d, s * C), ditch: [number, number] = [s * (RH + 0.6), Math.min(0, h) * 0.15 - 0.25];
+          return s < 0 ? [[-C, h], ditch, [-RH, -0.02]] : [[RH, -0.02], ditch, [C, h]];
+        };
+        for (const d of rows) for (const [x, y] of pts(d)) m.vertex(d, x, y, x / LAND_TILE, texV(d0, d) / LAND_TILE, blend(d));
+        m.grid(rows.length, 3);
+      }
+      // noise walls along some stretches in town
+      for (const s of [-1, 1]) {
+        const x = s * (GUARDRAIL_X + 1.7), share = THEMES[themeIndexAt(rows[0], THEMES.length)].structures.noiseWalls;
+        const walled = rows.filter((d) => hash(Math.floor(d / 200), s > 0 ? 11 : 12) < share);
+        if (walled.length > 1) mesher(this.concrete).sweepFlat(walled, () => box(x - 0.12, x + 0.12, -0.5, 4), CONCRETE_TILE);
+      }
+    }
+
+    // tunnels: the tube, its lamps, the hill closed over it, and a concrete headwall at each portal
+    for (const rows of runs((m) => m === 'tunnel')) {
+      mesher(this.concrete).sweep(rows, () => VAULT_PROFILE, CONCRETE_TILE, v0(rows));
+      const m = mesher(land);
+      for (const d of rows) {
+        const l = terrainHeight(d, -C), r = terrainHeight(d, C);
+        for (const [x, y] of [[-C, l], [0, (l + r) / 2 + 1], [C, r]]) m.vertex(d, x, y, x / LAND_TILE, texV(d0, d) / LAND_TILE, blend(d));
+      }
+      m.grid(rows.length, 3);
+      const lampBox = new THREE.BoxGeometry(0.35, 0.1, 1.6);
+      for (let d = Math.ceil(rows[0] / 10) * 10; d < rows[rows.length - 1]; d += 10) for (const x of [-3.2, 3.2]) this.solid(mesher(this.lamp), lampBox, d, x, ROADSIDE.tunnelHeight - 0.55);
+    }
+    for (const s of structuresIn(d0, d1)) {
+      if (s.kind === 'tunnel') {
+        for (const e of [s.from, s.to]) if (e >= d0 && e < d1) this.portal(mesher(this.headwall), e);
+      } else this.bridgeSupports(mesher(this.concrete), s, d0, d1);
+    }
+
+    // bridges: the deck under the road and a concrete parapet on each edge
+    for (const rows of runs((m) => m === 'bridge')) {
+      mesher(this.concrete).sweepFlat(rows, () => [[RH + 0.35, 0], [RH + 0.35, -DECK], [-RH - 0.35, -DECK], [-RH - 0.35, 0]], CONCRETE_TILE, v0(rows));
+      for (const s of [-1, 1]) mesher(this.concrete).sweepFlat(rows, () => box(s * RH + (s < 0 ? -0.35 : 0), s * RH + (s < 0 ? 0 : 0.35), -0.05, 1), CONCRETE_TILE);
+    }
+
+    for (const d of overpassesIn(d0, d1)) this.overpass(mesher(this.concrete), mesher(this.asphalt), d);
+
+    // chevrons on the outside of tight bends
+    for (let d = Math.ceil(d0 / 50) * 50; d < d1; d += 50) {
+      const k = curvatureAt(d);
+      if (Math.abs(k) < 1 / ROADSIDE.chevronRadius || modeOf(structureAt(d)) !== 'open') continue;
+      const x = -Math.sign(k) * (GUARDRAIL_X + 0.9), board = new THREE.Mesh(this.sign, k > 0 ? this.chevron.right : this.chevron.left);
+      board.position.y = 1.8;
+      const pole = new THREE.Mesh(this.signPost, this.steel), sign = new THREE.Group();
+      sign.add(board, pole);
+      group.add(pf.place(sign, d, x));
+    }
+
+    for (const d of gantriesIn(d0, d1)) {
+      const g = this.spare.pop() ?? gantry(this.steel);
+      const next = THEMES[(themeIndexAt(d, THEMES.length) + 1) % THEMES.length];
+      g.next.draw(next.name.toUpperCase(), `↑ ${(toNextBorder(d) / 1000).toFixed(1)} km`);
+      for (const m of g.mats) m.emissiveIntensity = 0.08 + this.night * 0.55;
+      group.add(pf.place(g.group, d, 0));
+      gantries.push(g);
+      this.live.add(g);
+    }
+
+    for (const [mat, m] of meshers) {
+      if (m.empty) continue;
+      const g = m.geometry(), mesh = new THREE.Mesh(g, mat);
+      mesh.receiveShadow = true;
+      mesh.castShadow = mat === this.metal || mat === this.concrete || mat === this.headwall;
+      group.add(mesh);
+      geos.push(g);
+    }
+    return { group, geos, gantries };
+  }
+
+  /** Adds a solid (built around its own origin, -z down the road) at road point (d, x, y). */
+  private solid(m: Mesher, geo: THREE.BufferGeometry, d: number, x: number, y: number) {
+    const p = geo.getAttribute('position'), n = geo.getAttribute('normal'), uv = geo.getAttribute('uv');
+    const before = m.vertexCount;
+    for (let i = 0; i < p.count; i++) {
+      m.vertex(d - p.getZ(i), x + p.getX(i), y + p.getY(i), uv.getX(i), uv.getY(i));
+      m.normal(n.getX(i), n.getY(i), -n.getZ(i), d);
+    }
+    m.indices(geo.index?.array ?? Array.from({ length: p.count }, (_, i) => i), before);
+  }
+
+  /** Headwall around a tunnel mouth at road position `d`: a ring of concrete from the vault out to the hill's face. */
+  private portal(m: Mesher, d: number) {
+    const l = terrainHeight(d, -C), r = terrainHeight(d, C), mid = (l + r) / 2 + 2;
+    const top = (x: number) => (x < 0 ? mid + (l + 1 - mid) * (-x / C) : mid + (r + 1 - mid) * (x / C));
+    const inner = VAULT_PROFILE.slice(1, -1), pairs: [number, number, number, number][] = [];
+    for (const [x, y] of inner) {
+      const ox = (x / TH) * C;
+      if (y <= VAULT) {
+        pairs.push([x, y, ox, y === 0 ? -0.5 : y]);
+        if (y === VAULT) pairs.push([x, y, ox, top(ox)]); // up the side to the top corner
+      } else pairs.push([x, y, ox, top(ox)]);
+    }
+    // the right wall's corner comes before its arch, the left wall's after: put the left corner pair after the arch
+    const ordered = [...pairs.slice(0, 3), ...pairs.slice(3, -3), pairs[pairs.length - 2], pairs[pairs.length - 3], pairs[pairs.length - 1]];
+    for (const [x, y, ox, oy] of ordered) {
+      m.vertex(d, x, y, x / CONCRETE_TILE, y / CONCRETE_TILE);
+      m.vertex(d, ox, oy, ox / CONCRETE_TILE, oy / CONCRETE_TILE);
+    }
+    m.grid(ordered.length, 2);
+  }
+
+  /** Abutments at both ends of a bridge and piers every ~40 m, down to the valley floor or the lake bed. */
+  private bridgeSupports(m: Mesher, s: Structure, d0: number, d1: number) {
+    const n = Math.max(1, Math.round((s.to - s.from) / 40)), step = (s.to - s.from) / n;
+    for (let i = 0; i <= n; i++) {
+      const d = s.from + i * step;
+      if (d < d0 || d >= d1) continue;
+      const bottom = Math.min(floorHeight(d), s.water ? waterLevel(s) - 4 : Infinity) - 2, top = -DECK;
+      const h = top - bottom;
+      if (h <= 0) continue;
+      if (i === 0 || i === n) {
+        const wall = new THREE.BoxGeometry(2 * RH + 0.7, h, 2.5).translate(0, bottom + h / 2, 0);
+        this.solid(m, wall, d + (i === 0 ? 1.25 : -1.25), 0, 0);
+        continue;
+      }
+      const cap = new THREE.BoxGeometry(2 * RH - 2, 1.2, 2.6).translate(0, top - 0.6, 0);
+      this.solid(m, cap, d, 0, 0);
+      for (const x of [-5, 5]) this.solid(m, new THREE.BoxGeometry(2.2, h - 1.2, 2.2).translate(0, bottom + (h - 1.2) / 2, 0), d, x, 0);
     }
   }
 
-  /** Sign at road distance `d`: name of the next area and how far it is from the sign. */
-  private label(g: ReturnType<typeof gantry>, d: number) {
-    const next = THEMES[(themeIndexAt(d, THEMES.length) + 1) % THEMES.length];
-    g.next.draw(next.name.toUpperCase(), `↑ ${(toNextBorder(d) / 1000).toFixed(1)} km`);
+  /** A local road crossing over the motorway on a concrete bridge, from embankment to embankment. */
+  private overpass(m: Mesher, top: Mesher, d: number) {
+    const clear = ROADSIDE.overpassClear, span = 2 * (C + 8);
+    this.solid(m, new THREE.BoxGeometry(span, 1.4, 10).translate(0, clear + 0.7, 0), d, 0, 0);
+    this.solid(top, new THREE.BoxGeometry(span, 0.04, 9).translate(0, clear + 1.42, 0), d, 0, 0);
+    for (const s of [-1, 1]) {
+      this.solid(m, new THREE.BoxGeometry(span, 1, 0.3).translate(0, clear + 1.9, s * 4.85), d, 0, 0);
+      this.solid(m, new THREE.BoxGeometry(1.2, clear, 7).translate(0, clear / 2, 0), d, s * (GUARDRAIL_X + 1.8), 0);
+      this.solid(m, new THREE.BoxGeometry(5, clear + 2.4, 11).translate(0, (clear + 1.4) / 2 - 0.5, 0), d, s * (C + 6), 0);
+    }
   }
 }

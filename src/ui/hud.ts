@@ -5,7 +5,7 @@ import type { PlayerInfo, Result as Standing } from '../net/protocol.ts';
 export type Screen = 'menu' | 'play' | 'pause' | 'over' | 'mp' | 'lobby' | 'countdown' | 'out' | 'results';
 export type BattleStats = { alive: number; total: number; wall: number; place: number; ping: number; udp: boolean; ahead: number; fix: number }; // ahead: ms rivals are predicted past their reports; fix: m each report corrects // wall: meters ahead of the storm
 
-export type Stats = { score: number; kmh: number; gear: number; rev: number; km: number; mult: number }; // rev: 0..1 of redline
+export type Stats = { score: number; kmh: number; gear: number; rev: number; km: number; mult: number; damage: number }; // rev: 0..1 of redline; damage: %
 export type Result = { score: number; best: number; isNew: boolean; km: number; nearMisses: number; seconds: number };
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -167,6 +167,10 @@ export class Hud {
     const mult = $('mult');
     mult.textContent = `×${s.mult}`;
     mult.dataset.tier = String(s.mult);
+    const bar = $('damage-bar'), dmg = Math.round(s.damage);
+    bar.style.width = `${dmg}%`;
+    bar.dataset.level = dmg >= 75 ? 'bad' : dmg >= 50 ? 'warn' : 'ok';
+    $('damage').title = `Damage ${dmg} %`;
   }
 
   setBest(best: number) {

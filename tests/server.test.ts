@@ -64,6 +64,8 @@ test('each tick sends one snapshot with every racing car, by grid slot', () => {
   const { r, inbox } = room(3);
   r.start('p0');
   const grid = (inbox.p0.find((m) => !(m instanceof Uint8Array) && m.t === 'go') as { grid: string[] }).grid;
+  const seeds = ['p0', 'p1', 'p2'].map((p) => (inbox[p].find((m) => !(m instanceof Uint8Array) && m.t === 'go') as { seed: number }).seed);
+  assert.ok(Number.isInteger(seeds[0]) && seeds.every((s) => s === seeds[0]), 'the whole room races on the same map');
   r.setState('p1', encodeState({ d: 42, x: 1.8, heading: 0, speed: 30, steer: 0, brake: false, score: 7 }), 4990);
   r.setState('p2', encodeState({ d: 40, x: -1.8, heading: 0, speed: 31, steer: 0, brake: true, score: 9 }), 4980);
   r.tick(5000);

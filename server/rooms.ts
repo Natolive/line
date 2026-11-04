@@ -73,7 +73,8 @@ export class Room {
     this.out = [];
     const grid = [...this.members.keys()].sort(() => Math.random() - 0.5);
     grid.forEach((id, slot) => Object.assign(this.members.get(id)!, { alive: true, slot, latest: null, stamp: null, d: 0 }));
-    this.broadcast({ t: 'go', startsIn: COUNTDOWN_MS, grid });
+    // a new map every race, the same for the whole room
+    this.broadcast({ t: 'go', startsIn: COUNTDOWN_MS, grid, seed: Math.floor(Math.random() * 2 ** 32) });
   }
 
   /** A player's car (raw binary, already size-checked), simulated at server time `at` (see `stateTime`): kept until the next tick. */

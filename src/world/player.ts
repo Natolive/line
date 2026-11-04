@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-import { GUARDRAIL_X, LANES, SHOULDER } from '../core/config.ts';
+import { GUARDRAIL_X, IMPACT, LANES, SHOULDER } from '../core/config.ts';
 import type { Car } from '../data/cars/index.ts';
 import type { Rect } from '../rules/collision.ts';
 import { startWreck, stepWreck, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { onShoulder } from '../rules/difficulty.ts';
+import { damageEffects, massOf, railImpact, type Moving } from '../rules/impact.ts';
 import { stepVehicle, type DriveInput, type VehicleState } from '../rules/vehicle.ts';
 import type { Fleet } from './vehicles/fleet.ts';
 import { setBrakeLights } from './vehicles/lights.ts';
@@ -19,6 +20,10 @@ export class Player {
   gear = 1;
   rpm = 0;
   wreck: Wreck | null = null; // set from the crash until the next reset
+  damage = 0; // %, from knocks (rules/impact.ts); 100 = wrecked
+  private slip = 0; // m/s sideways from a knock, soaked up by the tyres
+  private spin = 0; // rad/s of yaw from a knock
+  private pullSide = 1; // which way a badly damaged car pulls
   private suspension = new Suspension();
   private scene: THREE.Scene;
   private fleet: Fleet;
@@ -68,6 +73,7 @@ export class Player {
   reset(speed: number, x = LANES[2]) {
     this.state = { x, heading: 0, speed, steer: 0 };
     this.wreck = null;
+    this.damage = this.slip = this.spin = 0;
     this.lateralAccel = 0;
     this.suspension.reset(this.car.body);
     this.sync(0);
@@ -80,8 +86,36 @@ export class Player {
     setBrakeLights(this.car, false);
   }
 
-  /** Advances the car. `forward` is how far it travelled down the road this frame. */
-  update(dt: number, input: DriveInput): { forward: number; scraped: boolean; wreck?: WreckEvents } {
+  /** Mass (kg) and velocity in the road plane (m/s, x right, z back), as impacts see the car. */
+  get moving(): Moving {
+    const s = this.state;
+    return { rect: this.rect, vx: s.speed * Math.sin(s.heading) + this.slip, vz: -s.speed * Math.cos(s.heading), mass: massOf(this.car.w, this.car.l) };
+  }
+
+  /** A knock: `dv` the change of velocity (x right, z back), `spin` rad/s of yaw, `damage` % added. */
+  knock(dv: [number, number], spin: number, damage: number) {
+    const s = this.state;
+    s.speed = Math.max(0, s.speed - dv[1] * Math.cos(s.heading) + dv[0] * Math.sin(s.heading));
+    this.slip += dv[0] * Math.cos(s.heading) + dv[1] * Math.sin(s.heading);
+    this.spin = Math.max(-2.5, Math.min(2.5, this.spin + spin));
+    this.hurt(damage);
+  }
+
+  private hurt(damage: number) {
+    if (this.damage < IMPACT.limpAt && this.damage + damage >= IMPACT.limpAt) this.pullSide = Math.random() < 0.5 ? -1 : 1;
+    this.damage = Math.min(100, this.damage + damage);
+  }
+
+  /** Where smoke pours out of a badly damaged engine, in the world, or null while it is fine. */
+  engineSmoke() {
+    return damageEffects(this.damage).smoke ? this.car.mesh.localToWorld(new THREE.Vector3(0, 0.9, -this.car.l / 2 + 0.7)) : null;
+  }
+
+  /**
+   * Advances the car on a road bending by `curvature` (1/m). `forward` is how far it travelled down the road this
+   * frame; `railJolt` (km/h) how hard it just hit a rail, `wrecked` if that, or the damage, finished it.
+   */
+  update(dt: number, input: DriveInput, curvature = 0): { forward: number; scraped: boolean; railJolt: number; wrecked: boolean; wreck?: WreckEvents } {
     const car = this.car, w = this.wreck;
     if (w) {
       const wreck = stepWreck(w, dt);
@@ -89,23 +123,35 @@ export class Player {
       car.mesh.position.set(w.x, w.y, -w.s);
       car.mesh.rotation.set(0, -w.yaw, w.roll);
       spinWheels(car, w.vs * dt * Math.cos(w.roll)); // wheels turn only while it rides on them
-      return { forward: 0, scraped: false, wreck };
+      return { forward: 0, scraped: false, railJolt: 0, wrecked: false, wreck };
     }
 
-    const r = stepVehicle(this.state, input, dt, this.physics);
+    // damage: less power, and a pull to one side
+    const fx = damageEffects(this.damage);
+    const driven = { ...input, throttle: input.throttle * fx.power, steer: Math.max(-1, Math.min(1, input.steer + fx.pull * this.pullSide)) };
+    const r = stepVehicle(this.state, driven, dt, this.physics, curvature);
     this.gear = r.gear;
     this.rpm = r.rpm;
-    let s = r.state, scraped = false;
+    let s = r.state, scraped = false, railJolt = 0;
+    // a knock's sideways shove and spin, soaked up by the tyres
+    s = { ...s, x: s.x + this.slip * dt, heading: s.heading + this.spin * dt };
+    this.slip -= Math.sign(this.slip) * Math.min(Math.abs(this.slip), this.physics.grip * IMPACT.slipGrip * dt);
+    this.spin *= Math.exp(-IMPACT.spinDamp * dt);
     if (onShoulder(s.x)) s = { ...s, speed: Math.max(0, s.speed - SHOULDER.drag * dt) };
-    // Guardrail: clamp, bleed speed, deflect the nose away from the rail.
+    // Guardrail: clamp, bleed speed, deflect the nose away from the rail; a steep hit jolts and damages the car.
     const reach = (car.w / 2) * Math.cos(s.heading) + (car.l / 2) * Math.abs(Math.sin(s.heading));
     const limit = GUARDRAIL_X - 0.1 - reach;
     if (Math.abs(s.x) > limit) {
-      const side = Math.sign(s.x);
+      const side = Math.sign(s.x), into = side * (s.speed * Math.sin(s.heading) + this.slip);
+      const hit = railImpact(into);
+      railJolt = hit.jolt;
+      this.hurt(hit.damage + IMPACT.scrapePerSec * (s.speed / 27.8) * dt);
+      this.slip = 0;
+      this.spin *= 0.5;
       s = {
         ...s,
         x: side * limit,
-        speed: s.speed * (1 - Math.min(0.5, dt * 1.2)),
+        speed: Math.max(0, s.speed * (1 - Math.min(0.5, dt * 1.2)) - hit.dv * 0.5), // a hard hit also costs speed
         heading: Math.sign(s.heading) === side ? -s.heading * 0.3 : s.heading,
       };
       scraped = true;
@@ -116,14 +162,7 @@ export class Player {
     this.suspension.update(car.body, dt, r.accel, r.lateralAccel, s.speed * dt);
     setBrakeLights(car, input.brake > 0);
     this.sync(s.speed * dt);
-    return { forward: r.forward, scraped };
-  }
-
-  /** Contact with another player: pushed sideways by `dx` meters, and slowed to `maxSpeed` if given. */
-  shove(dx: number, maxSpeed?: number) {
-    this.state.x += dx;
-    this.state.heading += dx * 0.05;
-    if (maxSpeed !== undefined) this.state.speed = Math.min(this.state.speed, Math.max(0, maxSpeed));
+    return { forward: r.forward, scraped, railJolt, wrecked: this.damage >= 100 };
   }
 
   /** 0 = day, 1 = night. */

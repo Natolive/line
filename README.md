@@ -16,9 +16,13 @@ The multiplayer server runs in the `server` container, reachable at `ws://lane.l
 
 ## The road
 
-The motorway runs through three areas in a loop: Countryside, City, City by night.
+The motorway runs through eight areas in a loop: Countryside, Farmland, Lakeside, Mountains, Desert, Industrial zone, City, City by night.
 
-Each area lasts 2.5 km; the sky, sun, fog and lights blend into the next one over 600 m.
+Each area lasts 2.5 km; the sky, sun, fog, lights and the shape of the land blend into the next one over 600 m.
+
+The road bends like a real motorway (eased clothoid curves), gently in the plains, tightly in the mountains: take a bend faster than your tyres can hold and you run wide into the rail. Red chevrons mark the tight ones; traffic slows down for them.
+
+On the way: tunnels through the mountains (dark inside, lit by their lamps), viaducts over river valleys, a long bridge across the lake, local roads crossing over on bridges, noise walls in town, wind turbines and power lines across the fields, mesas and cacti in the desert. Every race is a new map: another starting region, other bends, tunnels, bridges, hills and scenery. Online, the whole room races on the same one.
 
 Green gantries over the road tell you which area comes next and how far it is.
 
@@ -34,9 +38,7 @@ The first player in the room is the host and starts the race with `Space`.
 
 Everyone starts side by side; a storm wall chases the pack and keeps speeding up (80 → 260 km/h).
 
-You're out if the storm catches you, if you hit traffic, or if you ram another driver (45 km/h closing speed or more).
-
-Lighter contact between drivers just shoves you aside, with sparks.
+You're out if the storm catches you or your car is wrecked. Contact between drivers follows the same rules as with traffic (below): a shove in the side is a real tactic, ramming someone hard wrecks you both.
 
 Once you're out, you spectate: the camera rides with the nearest driver still racing; `←` `→` (or a tap) switches driver.
 
@@ -82,7 +84,14 @@ Speed multiplies them: ×2 above 150 km/h, ×3 above 200, ×4 above 250.
 
 Passing a car within 1 m earns a near-miss bonus.
 
-Hitting the guardrail slows you down; hitting a car ends the run.
+Knocks are judged by how hard your car is jolted, as in crash tests, from both cars' speeds, the angle and their masses (a lorry hardly moves):
+
+- a side swipe pushes both cars apart and may spin you a little, with sparks: harmless;
+- a harder knock (say 15-50 km/h faster into someone's back, or a firm shove) damages the car; damage adds up (gauge under the speedometer);
+- from 50 % the engine smokes, from 75 % it loses power and pulls to one side, at 100 % it's wrecked;
+- a violent hit (about 55 km/h faster into the back of a car) wrecks it at once.
+
+The guardrail is safe to brush along but costs a little damage while you grind it; hit it at a steep angle at speed and it can wreck you. Cars you knock brake with their hazards on, then steer back into their lane.
 
 ## Production
 
@@ -138,7 +147,7 @@ A model is usable only if Sketchfab shows a Download button and a CC0 or CC Attr
 
 `src/rules/` holds pure logic: car physics and gearbox, collisions, difficulty, themes. It is the only tested part.
 
-`src/world/` holds everything 3D: camera, sky and light (`environment.ts`), road, scenery, traffic AI, effects; cars in `world/vehicles/`.
+`src/world/` holds everything 3D: camera, sky and light (`environment.ts`), the curved road with its tunnels and bridges (`road.ts`), the land (`terrain.ts`), scenery, traffic AI, effects; cars in `world/vehicles/`. The road's shape and the land are pure functions of the distance (`rules/track.ts`, `rules/terrain.ts`), the same for every player.
 
 
 

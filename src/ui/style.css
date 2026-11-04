@@ -116,6 +116,12 @@ html, body {
 .kmh small { font-size: 13px; margin-left: 4px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
 .rpm { margin-top: 6px; height: 5px; width: 130px; border-radius: 3px; background: rgb(247 244 238 / 0.18); overflow: hidden; }
 #rpm-bar { height: 100%; width: 0; background: linear-gradient(90deg, var(--text) 70%, var(--accent) 85%); }
+.damage { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+.damage .label { font-size: 10px; line-height: 1; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.damage .track { flex: 1; height: 4px; border-radius: 2px; background: rgb(247 244 238 / 0.18); overflow: hidden; }
+#damage-bar { height: 100%; width: 0; background: #7ccf6a; transition: width 0.2s; }
+#damage-bar[data-level='warn'] { background: var(--gold); }
+#damage-bar[data-level='bad'] { background: var(--accent); }
 
 #popups { position: absolute; top: 28%; left: 0; right: 0; display: grid; justify-items: center; gap: 6px; }
 .popup {

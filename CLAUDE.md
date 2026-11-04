@@ -34,7 +34,13 @@ Every gameplay tuning number lives in `src/core/config.ts`, car figures in `src/
 
 Units are meters, seconds, radians. Speeds in m/s internally; km/h only for display.
 
-The player stays at z = 0 and the world scrolls toward +z. Forward is -z.
+The road is a real curve, a pure function of `d` and the map's seed (`rules/track.ts`: curvature, heading, position, tunnels and bridges); the land beside it is `rules/terrain.ts`.
+
+Each race draws a new map: `setSeed()` decides the starting region, bends, structures, land and scenery. Solo draws its own seed; online the server sends one in `go`. Any randomness in the map goes through `hash()`/`randomFor()`, never `Math.random`, so a seed always gives the same map for everyone. Gameplay stays in road coordinates (`d`, lateral `x`, heading measured from the road); only drawing uses the curve.
+
+Everything placed along the road lives under `TrackView.root` (`world/track.ts`) at its place on the curve (`place()`), never at a hand-computed z. Root is moved so the view point is at the origin facing -z: the player, camera and effects stay in that local frame.
+
+Road, land and scenery are built in pieces by a `Ring`, which keeps them complete from behind the mirror's reach to past the fog whatever happens (driving, restart, spectating jump); never build or free them by hand.
 
 x is lateral, + is right. Heading + means turned right.
 
@@ -44,9 +50,11 @@ Lanes are indexed 0 (left, fast) to 3 (right, slow).
 
 `THEMES` in `data/themes.ts` defines each area; `rules/themes.ts` decides which one applies at a distance and how far a blend has gone.
 
-Sky, sun, fog and reflections blend in `world/environment.ts`; sun direction and fog colour are read from each HDRI, never hand-set.
+Sky, sun, fog and reflections blend in `world/environment.ts`; sun direction and fog colour are read from each HDRI, never hand-set. They turn with the road's heading, and give way to the lamps inside tunnels (`tunnelShade`).
 
-Scenery fills 40 m sections far ahead in the fog (`world/scenery.ts`); never spawn props in view.
+Scenery fills 40 m sections far ahead in the fog (`world/scenery.ts`), standing on the land (`terrainHeight`); never spawn props in view.
+
+Each theme also sets its land (`relief`, rock, snow line), its bends (`curves`) and what the road meets (`structures`: tunnels, viaducts, a lake bridge, overpasses, noise walls). Lengths and sizes of those live in `ROADSIDE` and `TRACK` (`core/config.ts`).
 
 Night is one number (0..1) that drives lamps, lit windows, sign glow and headlights through `setNight()` on each system.
 
@@ -94,6 +102,8 @@ Use `node:test` + `node:assert`. No test framework.
 
 Any change to physics, collisions or difficulty needs a test in `tests/rules.test.ts`.
 
+Contacts go through `rules/impact.ts`: momentum shared by mass, damage from each car's jolt (`IMPACT` in `core/config.ts`). Never end a run on a mere overlap.
+
 Before finishing a change: `npm run typecheck && npm test && npm run build`.
 
 ## Assets
@@ -111,6 +121,8 @@ If a model renders washed-out white or chrome, check its triangle winding first 
 Never bake transforms into model geometry: meshes are quantized by meshopt, so copy node matrices instead.
 
 Only use assets whose license allows it (CC0 or CC-BY) and keep `public/models/CREDITS.md` up to date.
+
+Some packs use specular-glossiness materials, which three.js ignores (white models): the fetch script converts every model to metal-rough.
 
 Check a Sketchfab model before downloading: `curl -s https://api.sketchfab.com/v3/models/<id>` → `license.label` and `isDownloadable`. Editorial or no license is a hard no.
 

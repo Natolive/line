@@ -6,10 +6,11 @@ import { THEMES } from '../data/themes.ts';
 import type { CarState } from '../net/protocol.ts';
 import { Sfx } from '../platform/audio.ts';
 import { Input } from '../platform/input.ts';
-import { rectsOverlap } from '../rules/collision.ts';
+import { impact, massOf, type Hit } from '../rules/impact.ts';
 import { crashSeverity, shunt, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { multiplierFor } from '../rules/difficulty.ts';
-import { themeBlend, themeIndexAt, toNextBorder } from '../rules/themes.ts';
+import { themeBlend, themeIndexAt } from '../rules/themes.ts';
+import { curvatureAt, setSeed, tunnelShade } from '../rules/track.ts';
 import { measure } from '../rules/vehicle.ts';
 import { Hud, type Screen } from '../ui/hud.ts';
 import type { World } from '../world/assets.ts';
@@ -21,12 +22,14 @@ import { Road } from '../world/road.ts';
 import { Scenery } from '../world/scenery.ts';
 import { Smoke } from '../world/smoke.ts';
 import { Stage } from '../world/stage.ts';
+import { Terrain } from '../world/terrain.ts';
+import { TrackView } from '../world/track.ts';
 import { Traffic, type Driver } from '../world/traffic.ts';
 import type { Fleet } from '../world/vehicles/fleet.ts';
 import { setNight } from '../world/vehicles/lights.ts';
 import { Battle } from './battle.ts';
 import type { Car } from '../data/cars/index.ts';
-import { BUMP, CRASH, NEAR_MISS, START_SPEED } from './config.ts';
+import { CRASH, IMPACT, NEAR_MISS, START_SPEED } from './config.ts';
 
 type State = Screen | 'crash';
 const BEST_KEY = 'line-best', CAR_KEY = 'line-car', NAME_KEY = 'line-name';
@@ -35,7 +38,9 @@ const IDLE = { steer: 0, throttle: 0, brake: 0 };
 export class Game {
   private state: State = 'menu';
   private stage: Stage;
+  private track: TrackView;
   private road: Road;
+  private terrain: Terrain;
   private env: Environment;
   private scenery: Scenery;
   private zone = 0;
@@ -68,12 +73,14 @@ export class Game {
     this.stage = new Stage(root);
     const s = this.stage.scene;
     this.env = new Environment(s, this.stage.renderer, world);
-    this.road = new Road(s, world);
-    this.scenery = new Scenery(s, world);
-    this.scenery.reset(0);
-    this.road.reset(0);
+    setSeed(newSeed());
+    this.track = new TrackView(s);
+    this.road = new Road(this.track, world);
+    this.terrain = new Terrain(this.track, world, this.road.asphalt);
+    this.scenery = new Scenery(this.track, world);
+    this.view(0);
     this.player = new Player(s, fleet, GARAGE[this.carIndex]);
-    this.traffic = new Traffic(s, fleet);
+    this.traffic = new Traffic(this.track, fleet);
     this.fx = new Effects(s);
     this.smoke = new Smoke(s);
     this.traffic.reset(this.me);
@@ -127,6 +134,7 @@ export class Game {
       }
       if (this.battle) this.battle.frameAt = now;
       this.update(dt);
+      this.view(dt);
       this.applyTheme();
       // rear-view mirror while driving (and on the start grid); the HUD draws its frame
       const glass = this.hud.mirror(['play', 'countdown', 'pause'].includes(this.state));
@@ -147,16 +155,23 @@ export class Game {
     else this.sfx.resume();
   }
 
-  /** Sky, light, ground and night lights for where the car is on the road; announces each new zone. */
+  /** The world drawn around road position `dist`: the road, the land and the scenery are kept complete around it. */
+  private view(dt = 0) {
+    this.track.setView(this.dist);
+    this.road.update(this.dist);
+    this.terrain.update(this.dist, dt);
+    this.scenery.update(this.dist, dt);
+  }
+
+  /** Sky, light and night lights for where the car is on the road (dimmed in tunnels); announces each new zone. */
   private applyTheme() {
-    const n = THEMES.length, b = themeBlend(this.dist, n), zone = themeIndexAt(this.dist, n);
-    this.env.apply(THEMES[b.from], THEMES[b.to], b.t, this.stage.camera, this.player.state.x);
-    this.road.setGround(THEMES[zone], THEMES[(zone + 1) % n], -toNextBorder(this.dist));
+    const n = THEMES.length, b = themeBlend(this.dist, n), zone = themeIndexAt(this.dist, n), shade = tunnelShade(this.dist);
+    this.env.apply(THEMES[b.from], THEMES[b.to], b.t, this.stage.camera, this.player.state.x, this.track.heading, shade);
     const night = this.env.night;
-    setNight(night);
+    setNight(Math.max(night, shade)); // car lights come on in tunnels
     this.scenery.setNight(night);
     this.road.setNight(night);
-    this.player.setNight(night);
+    this.player.setNight(Math.max(night, shade * 0.6));
     if (zone !== this.zone) {
       this.zone = zone;
       if (this.state === 'play') this.hud.announce(THEMES[zone].name);
@@ -175,15 +190,21 @@ export class Game {
     this.hud.setCar(car, measure(car.physics), this.carIndex, GARAGE.length);
   }
 
-  /** Puts everything back on the start line; the car rolls off from road position (d, x), driving with `spec`'s figures if given. */
-  private startRace(d = 0, x?: number, spec: Car | null = null) {
+  /**
+   * Puts everything back on the start line of a new map (`seed`: a room shares one, solo draws its own); the car
+   * rolls off from road position (d, x), driving with `spec`'s figures if given.
+   */
+  private startRace(d = 0, x?: number, spec: Car | null = null, seed = newSeed()) {
+    setSeed(seed);
+    this.road.clear();
+    this.terrain.clear();
+    this.scenery.clear();
     this.score = this.time = this.nearMisses = 0;
     this.dist = d;
     this.watching = null;
     this.player.spec = spec;
     this.zone = themeIndexAt(d, THEMES.length);
-    this.scenery.reset(d);
-    this.road.reset(d);
+    this.view();
     this.player.reset(START_SPEED, x);
     this.traffic.reset(this.me);
     this.sfx.start();
@@ -212,15 +233,15 @@ export class Game {
     save(NAME_KEY, name);
     this.hud.mpError('');
     try {
-      this.battle = await Battle.join(room, name, GARAGE[this.carIndex].model, this.stage.scene, this.fleet, this.traffic, {
+      this.battle = await Battle.join(room, name, GARAGE[this.carIndex].model, this.track, this.fleet, this.traffic, {
         lobby: () => {
           if (this.state === 'mp') this.setState('lobby');
           const b = this.battle!;
           this.hud.setLobby(b.room, b.players, b.host, b.me, specCar(b.spec)?.name ?? null);
         },
-        go: (slot) => {
+        go: (slot, seed) => {
           const spec = specCar(this.battle!.spec);
-          this.startRace(slot.d, slot.x, spec);
+          this.startRace(slot.d, slot.x, spec, seed);
           if (spec) this.hud.popup(`Everyone drives with ${spec.name} figures`);
           this.hud.setBattle({ alive: this.battle!.players.length, total: this.battle!.players.length, wall: this.dist - this.battle!.wall(), place: 0, ping: this.battle!.ping, udp: this.battle!.udp, ...this.battle!.link });
           this.setState('countdown');
@@ -285,8 +306,7 @@ export class Game {
   private watch(r: Rival) {
     this.watching = r.info.id;
     this.dist = r.d;
-    this.road.reset(r.d);
-    this.scenery.reset(r.d);
+    this.view();
     this.battle!.rivals.focus(r.info.id);
   }
 
@@ -304,19 +324,47 @@ export class Game {
     return { d: this.dist, x: p.x, heading: p.heading, speed: p.speed, steer: p.steer, brake: this.input.read().brake > 0, score: Math.floor(this.score) };
   }
 
-  /** Contact with rivals: a big closing speed is a crash, a small one a shove with sparks. */
-  private bumpRivals() {
-    const b = this.battle!, p = this.player.state;
-    for (const r of b.rivals.drivers()) {
-      if (Math.abs(r.d - this.dist) > 8 || !rectsOverlap({ ...this.player.rect, z: 0 }, { ...r.rect, z: this.dist - r.d })) continue;
-      const closing = Math.abs(p.speed - r.speed) * 3.6;
-      if (closing > BUMP.crashKmh && r.d > this.dist) return this.crash(); // I rammed them
-      const side = Math.sign(p.x - r.x) || 1, behind = r.d > this.dist;
-      this.player.shove(side * BUMP.push * 0.05, behind ? r.speed - 1 : undefined);
-      this.fx.burst(this.player.car.mesh.position.clone().setX((p.x + r.x) / 2).setY(0.7), [0xffb347, 0xffe08a], 6, 4);
-      this.fx.shake = Math.max(this.fx.shake, 0.25);
-      this.sfx.scrape();
+  /**
+   * Knocks with traffic and rivals (rules/impact.ts): each one shoves, slows and spins both cars by their masses,
+   * and damages mine by how hard it was jolted. Scrapes are harmless, harder knocks add up, a violent one wrecks.
+   * Rivals are judged the same way by their own game, so a contact jolts both drivers alike.
+   */
+  private knocks() {
+    const me = this.me;
+    for (const { car, moving } of this.traffic.touching(me)) {
+      const hit = impact(this.player.moving, moving);
+      if (!hit) continue;
+      // pushed apart along the contact, split by mass (the host's traffic car moves; a mirrored one can't, so I do)
+      const share = this.traffic.remote ? 1 : moving.mass / (moving.mass + this.player.moving.mass);
+      this.player.state.x += hit.normal[0] * hit.depth * share;
+      this.traffic.knock(car, hit.dvb, [-hit.normal[0] * hit.depth * (1 - share), -hit.normal[1] * hit.depth], hit.jolt);
+      if (this.onKnock(hit, car.x)) return;
     }
+    for (const r of this.battle?.rivals.drivers() ?? []) {
+      if (Math.abs(r.d - this.dist) > 20) continue;
+      const hit = impact(this.player.moving, { rect: { ...r.rect, z: this.dist - r.d }, vx: r.speed * Math.sin(r.rect.heading), vz: -r.speed * Math.cos(r.rect.heading), mass: massOf(r.rect.w, r.rect.l) });
+      if (!hit) continue;
+      this.player.state.x += hit.normal[0] * hit.depth; // they move themselves, on their own game
+      if (this.onKnock(hit, r.x)) return;
+    }
+  }
+
+  /** My car takes knock `hit` from something at lateral `x`: shoved, damaged, sparks and a bang. True if it wrecked me. */
+  private onKnock(hit: Hit, x: number) {
+    this.player.knock(hit.dva, hit.spin, hit.damage);
+    if (hit.wreck || this.player.damage >= 100) {
+      this.crash();
+      return true;
+    }
+    if (hit.jolt < 1) return false;
+    const p = this.player.state, at = this.player.car.mesh.position.clone().setX((p.x + x) / 2).setY(0.7), k = Math.min(1, hit.jolt / IMPACT.wreckKmh);
+    this.fx.burst(at, k > 0.3 ? [0x2a2a2a, 0x8a8a8a, 0xffb347] : [0xffb347, 0xffe08a], Math.round(4 + 14 * k), 3 + 4 * k);
+    this.fx.shake = Math.max(this.fx.shake, 0.15 + 0.6 * k);
+    if (hit.damage > 0) {
+      this.sfx.thud();
+      if (hit.damage >= 3) this.hud.popup(`Damage ${Math.round(this.player.damage)} %`);
+    } else this.sfx.scrape();
+    return false;
   }
 
   // ---- frame ----
@@ -353,8 +401,6 @@ export class Game {
             forward = r.d - this.dist;
             this.dist = r.d;
             b.rivals.place(this.dist);
-            this.road.update(forward, this.dist);
-            this.scenery.update(forward, this.dist);
             const limiter = (specCar(b.spec) ?? GARAGE.find((c) => c.model === r.info.car) ?? GARAGE[0]).physics.limiterKmh;
             cam = { x: r.x, heading: r.heading, speed: (r.speed * 3.6) / limiter };
             this.hud.setWatching(r.info.name, r.speed * 3.6, this.battleStats().alive);
@@ -362,7 +408,7 @@ export class Game {
           b.publish(dt, null);
           this.hud.setBattle(this.battleStats());
         }
-        const wreck = this.player.car.mesh.position.setZ(this.dist - this.wreckD - (this.player.wreck?.s ?? 0));
+        const wreck = this.placeWreck();
         // traffic stops for the wreck where it is now, and can't drive through it
         const drivers: Driver[] = b?.rivals.drivers() ?? [], w = this.player.wreck;
         if (w && Math.abs(this.wreckD + w.s - this.dist) < 300) {
@@ -391,6 +437,7 @@ export class Game {
         if (this.player.wreck) this.player.update(dt, IDLE); // still sliding when the game-over screen comes up
         this.fx.update(dt, 0);
         this.smoke.update(dt, 0);
+        if (this.player.wreck) this.placeWreck();
         const at = this.player.car.mesh.position;
         this.stage.orbit(this.idleT, at.x, at.z);
     }
@@ -398,14 +445,18 @@ export class Game {
 
   private tick(dt: number) {
     const input = this.input.read(), b = this.battle;
-    const { forward, scraped } = this.player.update(dt, input);
+    const { forward, scraped, railJolt, wrecked } = this.player.update(dt, input, curvatureAt(this.dist));
+    if (wrecked) return this.crash();
+    if (railJolt > IMPACT.scratchKmh) {
+      this.sfx.thud();
+      this.fx.shake = Math.max(this.fx.shake, Math.min(1, railJolt / IMPACT.railWreckKmh));
+      this.hud.popup(`Damage ${Math.round(this.player.damage)} %`);
+    }
     const p = this.player.state, kmh = p.speed * 3.6, mult = multiplierFor(kmh, p.x);
     this.time += dt;
     this.dist += forward;
     this.score += forward * mult;
 
-    this.road.update(forward, this.dist);
-    this.scenery.update(forward, this.dist);
     this.fx.update(dt, forward);
     this.smoke.update(dt, forward);
     const misses = this.traffic.update(dt, this.me, b?.rivals.drivers() ?? [], this.dist / 1000);
@@ -433,17 +484,19 @@ export class Game {
     // exhaust: a thin haze when cruising, thicker puffs on the throttle and at high revs
     if (Math.random() < dt * (6 + input.throttle * (10 + rpm / 300))) this.puff(this.player.exhaust(), 0xd8d8d8, 0.25, 1.4, 1.1, 0.12 + input.throttle * 0.18);
     if (screech > 0.3) for (const w of this.player.rearWheels()) if (Math.random() < dt * 40 * screech) this.puff(w, 0xf2f2f2, 0.6, 3, 1.4, 0.35 * screech);
-    this.hud.setStats({ score: this.score, kmh, gear, rev: rpm / car.physics.redline, km: this.dist / 1000, mult });
+    // a damaged engine smokes, darker and thicker as it gets worse
+    const engine = this.player.engineSmoke(), dmg = this.player.damage;
+    if (engine && Math.random() < dt * (8 + dmg / 4)) this.puff(engine, dmg > IMPACT.limpAt ? 0x262626 : 0x8a8a8a, 0.4, 2.5, 1.6, 0.2 + dmg / 300);
+    this.hud.setStats({ score: this.score, kmh, gear, rev: rpm / car.physics.redline, km: this.dist / 1000, mult, damage: dmg });
     this.stage.follow(p.x, p.heading, (p.speed * 3.6) / car.physics.limiterKmh, dt);
 
     if (b) {
       b.sync(dt, this.dist);
       b.publish(dt, this.carState());
-      this.bumpRivals();
       this.hud.setBattle(this.battleStats());
       if (this.dist < b.wall()) return this.crash('wall');
     }
-    if (this.state === 'play' && this.traffic.hits(this.me)) this.crash();
+    if (this.state === 'play') this.knocks();
   }
 
   private battleStats() {
@@ -451,6 +504,15 @@ export class Game {
     const alive = rivals.filter((r) => r.alive).length + (this.state === 'play' ? 1 : 0);
     const place = 1 + rivals.filter((r) => r.alive && r.d > this.dist).length;
     return { alive, total: rivals.length + 1, wall: this.dist - b.wall(), place: this.state === 'play' ? place : 0, ping: b.ping, udp: b.udp, ...b.link };
+  }
+
+  /** Draws the wreck where it is on the road (it slides on along the curve), relative to the view. */
+  private placeWreck() {
+    const w = this.player.wreck!, mesh = this.player.car.mesh;
+    this.track.setView(this.dist);
+    this.track.placeLocal(mesh, this.wreckD + w.s, w.x, w.yaw, w.y);
+    mesh.rotation.z = w.roll;
+    return mesh.position;
   }
 
   private puff(at: THREE.Vector3, color: number, size: number, grow: number, life: number, alpha: number) {
@@ -519,6 +581,9 @@ export class Game {
     this.setState('over');
   }
 }
+
+/** A new map: any 32-bit number. */
+const newSeed = () => Math.floor(Math.random() * 2 ** 32);
 
 /** The garage car a room's `spec` names (see Battle.spec), if any. */
 const specCar = (id: string | null) => (id ? GARAGE.find((c) => c.id === id) ?? null : null);

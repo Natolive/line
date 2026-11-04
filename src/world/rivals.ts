@@ -1,5 +1,6 @@
 // Other players' cars: their real models, steered toward what their games report, with a name above them.
 import * as THREE from 'three';
+import type { TrackView } from './track.ts';
 import { GARAGE } from '../data/cars/index.ts';
 import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { CarState, PlayerInfo } from '../net/protocol.ts';
@@ -45,11 +46,13 @@ function nameTag(text: string) {
 
 export class Rivals {
   readonly all = new Map<string, Rival>();
-  private scene: THREE.Scene;
+  private scene: THREE.Object3D;
+  private track: TrackView;
   private fleet: Fleet;
 
-  constructor(scene: THREE.Scene, fleet: Fleet) {
-    this.scene = scene;
+  constructor(track: TrackView, fleet: Fleet) {
+    this.track = track;
+    this.scene = track.root;
     this.fleet = fleet;
   }
 
@@ -112,12 +115,10 @@ export class Rivals {
     for (const r of this.all.values()) r.tag.visible = r.info.id !== id;
   }
 
-  /** Places every rival relative to the road position `myD` the world is drawn around. */
+  /** Places every rival on the road (the view follows `myD`; rivals stand where they are on the curve). */
   place(myD: number) {
-    for (const r of this.all.values()) {
-      r.v.mesh.position.set(r.x, 0, myD - r.d);
-      r.v.mesh.rotation.y = -r.heading;
-    }
+    void myD;
+    for (const r of this.all.values()) this.track.place(r.v.mesh, r.d, r.x, r.heading);
   }
 
   /**

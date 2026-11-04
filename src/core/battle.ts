@@ -1,6 +1,6 @@
 // Battle royale: the online side of a race. Owns the connection, the room, the grid, the wall clock,
 // the rivals and eliminations; the Game asks it questions and reacts to its events.
-import type * as THREE from 'three';
+import type { TrackView } from '../world/track.ts';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
 import { due } from '../net/interp.ts';
@@ -19,7 +19,7 @@ const ROW_GAP = 14; // meters between grid rows
 
 export type BattleEvents = {
   lobby(): void;
-  go(slot: { d: number; x: number }): void;
+  go(slot: { d: number; x: number }, seed: number): void; // seed: the map of this race
   out(id: string, reason: string, place: number): void;
   winner(ranking: Result[]): void;
   error(message: string): void;
@@ -62,7 +62,7 @@ export class Battle {
   link = { ahead: 0, fix: 0 };
   private tally = { ahead: 0, fix: 0, n: 0, t: 0 };
 
-  private constructor(scene: THREE.Scene, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
+  private constructor(scene: TrackView, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
     this.rivals = new Rivals(scene, fleet);
     this.traffic = traffic;
     this.events = events;
@@ -72,7 +72,7 @@ export class Battle {
   }
 
   /** Connects and joins room `room`; rejects with a message a player can act on. */
-  static async join(room: string, name: string, car: string, scene: THREE.Scene, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
+  static async join(room: string, name: string, car: string, scene: TrackView, fleet: Fleet, traffic: Traffic, events: BattleEvents) {
     const b = new Battle(scene, fleet, traffic, events);
     await b.net.connected();
     b.net.send({ t: 'join', room, name, car });
@@ -217,7 +217,7 @@ export class Battle {
           const p = this.players.find((q) => q.id === id), slot = gridSlot(i);
           if (p && id !== this.me) this.rivals.add(p, slot.d, slot.x);
         });
-        return this.events.go(gridSlot(m.grid.indexOf(this.me)));
+        return this.events.go(gridSlot(m.grid.indexOf(this.me)), m.seed);
       }
       case 'out':
         this.rivals.out(m.id);

@@ -37,7 +37,7 @@ export type ServerMessage =
   | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean; spec: string | null }
   | { t: 'lobby'; host: string; players: PlayerInfo[]; spec: string | null } // spec: see the 'spec' client message
   | { t: 'error'; message: string }
-  | { t: 'go'; startsIn: number; grid: string[] } // countdown in ms; grid = starting order, index = slot in snapshots
+  | { t: 'go'; startsIn: number; grid: string[]; seed: number } // countdown in ms; grid = starting order, index = slot in snapshots; seed = the map (rules/track.ts)
   | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)
   | { t: 'out'; id: string; reason: 'crash' | 'wall' | 'left'; place: number }
   | { t: 'winner'; id: string | null; ranking: Result[] } // ranking: winner first

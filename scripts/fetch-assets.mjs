@@ -19,11 +19,32 @@ const MODELS = {
   city: 'e0209ac5bb684d2d85e5ade96c92d2ff', // Low-poly City Buildings
   'city-night': 'b0035b8713b048bb8ddf311ee67c28c8', // Low Poly Night City Building Skyline
   trees: '5ff5a51e74324845a4e4905f182dfb2b', // Low Poly Forest Tree Pack
+  pines: '422b961ff3d14e7baa7e9077572b2247', // Scots Pine Trees Set (mountains)
+  birch: 'aa842dffd9654d33b8b91170ce83c172', // Birch tree (lake shores)
+  'house-1': 'a81c9bcf068f47ccb737bead5fac3e0d', // European House #1 (villages)
+  'house-2': 'c44f6b63ce494780856947d6c337aa0d', // European House #2
+  'house-3': 'ebdc29841f4d4b1fbc3d63c841a0a48a', // European House #3
+  barn: '906b74a1b8d7443eb66545dcc8a1b1c7', // Red Barn (farmland)
+  hay: 'd6e087f9a2a9416c94918f0503943c17', // Hay bales
+  turbine: '285032402a8543ae8bf3e3c4d8c9f98a', // Wind Turbine
+  pylon: '5bc9e49be13b4803aed3c25e87bb4486', // Pylon (power lines)
+  cactus: '588596f1601d48e6ad4cb24b31c3f33c', // Cactus pack (desert)
+  'desert-rock-1': ['0ba222783695441ea4ea932ba1470b8e', 0.2], // Eroded Sandstone Rock Formation
+  'desert-rock-2': ['70a64e97bf88415ab00b8a73c6573872', 0.2], // Layered Desert Rock Structure
+  'desert-arch': ['e7778771c06d4705a80cccb23a471d5c', 0.2], // Rock arch
+  'alpine-rock-1': ['298ba84ba6894296acae7f4a6fcf69e5', 0.25], // Alaskan Cliff Rock Chunk 7
+  'alpine-rock-2': ['8cbfcde549384449831b2f82809c825f', 0.25], // Alaskan Cliff Rock 18
+  petrol: 'dacd1c0d9f5045a6bc2180702714f12c', // Abandoned Petrol Station (desert)
+  factory: '770acf6b0da74af397f748d95141f8be', // industrial building
+  'factory-2': 'ff12e33d1dc844c8ae03c37259b12e94', // background factory
 };
 
 // Poly Haven (CC0): HDRI skies, one per theme, and PBR textures.
-const SKIES = ['kloofendal_48d_partly_cloudy_puresky', 'belfast_sunset_puresky', 'kloppenheim_02_puresky'];
-const TEXTURES = ['asphalt_02', 'aerial_grass_rock', 'concrete_floor_worn_001'];
+const SKIES = [
+  'kloofendal_48d_partly_cloudy_puresky', 'belfast_sunset_puresky', 'kloppenheim_02_puresky', 'farm_field_puresky', 'pizzo_pernice_puresky',
+  'qwantani_late_afternoon_puresky', 'lonely_road_afternoon_puresky', 'industrial_sunset_02_puresky',
+];
+const TEXTURES = ['asphalt_02', 'aerial_grass_rock', 'concrete_floor_worn_001', 'aerial_rocks_02', 'snow_02', 'aerial_sand', 'concrete_wall_008', 'gravel_ground_01'];
 const OUT = 'public/models';
 
 const env = existsSync('.env.local') ? readFileSync('.env.local', 'utf8') : '';
@@ -41,6 +62,7 @@ const credits = ['# Model credits', '', 'All models from Sketchfab, used under t
 for (const [name, entry] of Object.entries(MODELS)) {
   const [uid, ratio] = Array.isArray(entry) ? entry : [entry, 0];
   const info = await api(`/models/${uid}`);
+  if (!['CC Attribution', 'CC0 Public Domain'].includes(info.license?.label)) throw new Error(`${name}: license "${info.license?.label}" is not CC-BY or CC0`);
   credits.push(`- **${name}**: "${info.name}" by ${info.user.displayName} (${info.user.profileUrl}), ${info.license.label}, ${info.viewerUrl}`);
   if (existsSync(`${OUT}/${name}.glb`) || existsSync(`${OUT}/${name}/scene.gltf`)) { console.log(`skip ${name} (already here)`); continue; }
 
@@ -52,6 +74,9 @@ for (const [name, entry] of Object.entries(MODELS)) {
       '--compress', 'meshopt', '--texture-compress', 'webp', '--texture-size', '1024',
       '--join', 'false', '--flatten', 'false', '--instance', 'false', '--palette', 'false',
       ...(ratio ? ['--simplify', 'true', '--simplify-ratio', String(ratio), '--simplify-error', '0.001'] : ['--simplify', 'false'])]);
+    // some packs use the old specular-glossiness materials, which three.js no longer reads: they'd come out white
+    execFileSync('node_modules/.bin/gltf-transform', ['metalrough', `${OUT}/${name}.glb`, `${OUT}/${name}.glb`]);
+    execFileSync('node_modules/.bin/gltf-transform', ['webp', `${OUT}/${name}.glb`, `${OUT}/${name}.glb`]); // the conversion writes PNGs
     console.log(`${name}.glb  ${(dl.glb.size / 1e6).toFixed(1)} MB downloaded, compressed`);
   } else {
     const zip = `${OUT}/${name}.zip`;

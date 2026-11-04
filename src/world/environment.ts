@@ -31,6 +31,8 @@ const domeShader = {
 };
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const UP = new THREE.Vector3(0, 1, 0);
+const TUNNEL_GLOW = 0xffc98a; // sodium-ish tunnel lamps
 
 export class Environment {
   /** 0 = day, 1 = night. Drives street lamps, lit windows and headlights. */
@@ -75,8 +77,12 @@ export class Environment {
     scene.fog = this.fog;
   }
 
-  /** Blends everything between theme `a` and `b` (t: 0 → a, 1 → b). */
-  apply(a: Theme, b: Theme, t: number, camera: THREE.Camera, playerX: number) {
+  /**
+   * Blends everything between theme `a` and `b` (t: 0 → a, 1 → b). `heading` is the road's direction where
+   * the view is (the sky and sun stay put while the road turns under them); `shade` 0..1 is how deep in a
+   * tunnel the view is: daylight gives way to the warm light of its lamps.
+   */
+  apply(a: Theme, b: Theme, t: number, camera: THREE.Camera, playerX: number, heading = 0, shade = 0) {
     const skyA = this.world.skies[a.sky], skyB = this.world.skies[b.sky];
     const u = this.dome.material.uniforms;
     u.skyA.value = skyA.texture;
@@ -85,29 +91,32 @@ export class Environment {
     u.gainA.value = a.skyGain;
     u.gainB.value = b.skyGain;
     this.dome.position.copy(camera.position);
+    this.dome.rotation.y = heading;
+    this.scene.environmentRotation.y = heading;
 
     this.scene.environment = this.envs[t < 0.5 ? a.sky : b.sky];
-    this.scene.environmentIntensity = lerp(a.envIntensity, b.envIntensity, t);
+    this.scene.environmentIntensity = lerp(a.envIntensity, b.envIntensity, t) * (1 - 0.8 * shade);
     this.renderer.toneMappingExposure = lerp(a.exposure, b.exposure, t);
     this.night = lerp(a.night, b.night, t);
 
     // fog takes the colour of the horizon in the sky photo, so the ground melts into the sky
     this.fog.color.copy(skyA.horizon).multiplyScalar(a.skyGain).lerp(this.c.copy(skyB.horizon).multiplyScalar(b.skyGain), t);
     u.fogColor.value.copy(this.fog.color);
+    this.fog.color.lerp(this.c.set(TUNNEL_GLOW).multiplyScalar(0.25), shade * 0.6);
     this.fog.near = lerp(a.fog.near, b.fog.near, t);
     this.fog.far = lerp(a.fog.far, b.fog.far, t);
 
     // sun where the photo's sun is (kept a little above the horizon so shadows stay readable)
     const dir = skyA.sunDir.clone().lerp(skyB.sunDir, t).normalize();
     dir.y = Math.max(dir.y, 0.25);
-    dir.normalize();
-    this.sun.intensity = lerp(a.sun.intensity, b.sun.intensity, t);
+    dir.normalize().applyAxisAngle(UP, heading);
+    this.sun.intensity = lerp(a.sun.intensity, b.sun.intensity, t) * (1 - shade);
     this.sun.color.set(a.sun.color).lerp(this.c.set(b.sun.color), t);
     this.sun.target.position.set(playerX, 0, -15);
     this.sun.position.copy(this.sun.target.position).addScaledVector(dir, 150);
 
-    this.hemi.intensity = lerp(a.ambient, b.ambient, t);
-    this.hemi.color.copy(this.fog.color).multiplyScalar(1.5);
+    this.hemi.intensity = lerp(lerp(a.ambient, b.ambient, t), 0.5, shade);
+    this.hemi.color.copy(this.fog.color).multiplyScalar(1.5).lerp(this.c.set(TUNNEL_GLOW), shade);
     this.hemi.groundColor.set(0x2a2a26);
   }
 }
