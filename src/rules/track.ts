@@ -139,6 +139,15 @@ export function structuresIn(d0: number, d1: number) {
 /** The tunnel or bridge the road is on at `d`, if any. */
 export const structureAt = (d: number) => structuresIn(d, d)[0] ?? null;
 
+/**
+ * Where a race's finish line stands on this map: `length` m from the start, or just past the tunnel or bridge
+ * there (its gantry needs open sky and solid ground). The same for every player: it depends on the seed only.
+ */
+export function finishLineAt(length: number) {
+  const s = structureAt(length);
+  return s ? s.to + ROADSIDE.finishClear : length;
+}
+
 /** How deep in a tunnel `d` is: 0 in daylight, 1 once past the portal's fade. */
 export function tunnelShade(d: number) {
   const s = structureAt(d);

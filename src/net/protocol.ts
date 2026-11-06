@@ -4,8 +4,19 @@
 
 export type PlayerInfo = { id: string; name: string; car: string };
 
-/** A line of the final ranking: how far each driver got (m along the road) and how they went out (null: still racing, the winner). */
-export type Result = { id: string; name: string; out: 'crash' | 'wall' | 'left' | null; d: number };
+export type OutReason = 'crash' | 'wall' | 'left' | 'late'; // late: still short of the finish line when the race closed
+
+/**
+ * A line of the final ranking: how far each driver got (m along the road), how they went out (null: the battle
+ * royale's last one standing, or a race finisher) and, in a race, their time to the finish line (ms, else null).
+ */
+export type Result = { id: string; name: string; out: OutReason | null; d: number; time: number | null };
+
+/** A room's mode: null = battle royale (a storm wall chases the pack), else a race to a finish line this many m from the start. */
+export type Mode = number | null;
+export const RACE_LENGTHS = [5000, 10000, 20000]; // m, the races a host can choose
+export const RACE_GRACE_MS = 60_000; // once the winner is home, how long the others have to finish
+export const FINISH_SLACK = 60; // m a finish claim may be ahead of the driver's last reported position (their latest frames)
 
 /** A player's car, sent NET_HZ times a second by its own game (binary, see codec.ts). */
 export type CarState = {
@@ -25,6 +36,8 @@ export type ClientMessage =
   | { t: 'join'; room: string; name: string; car: string }
   | { t: 'car'; car: string } // changed car in the lobby
   | { t: 'spec'; car: string | null } // host only, in the lobby: everyone drives with this garage car's figures (id), or each their own (null)
+  | { t: 'mode'; mode: Mode } // host only, in the lobby
+  | { t: 'finish'; at: number } // I crossed the finish line, at this server time (ms; the moment within my frame)
   | { t: 'start' } // host only
   | { t: 'out'; reason: 'crash' | 'wall'; d: number } // I'm eliminated
   | { t: 'ping'; c: number } // client clock (ms), for round trip and clock sync
@@ -34,12 +47,13 @@ export type ClientMessage =
 type Rtc = { t: 'rtc'; sdp: string } | { t: 'ice'; c: string; mid: string };
 
 export type ServerMessage =
-  | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean; spec: string | null }
-  | { t: 'lobby'; host: string; players: PlayerInfo[]; spec: string | null } // spec: see the 'spec' client message
+  | { t: 'joined'; you: string; room: string; host: string; players: PlayerInfo[]; racing: boolean; spec: string | null; mode: Mode }
+  | { t: 'lobby'; host: string; players: PlayerInfo[]; spec: string | null; mode: Mode } // spec, mode: see the client messages
   | { t: 'error'; message: string }
-  | { t: 'go'; startsIn: number; grid: string[]; seed: number } // countdown in ms; grid = starting order, index = slot in snapshots; seed = the map (rules/track.ts)
+  | { t: 'go'; startsIn: number; grid: string[]; seed: number; mode: Mode } // countdown in ms; grid = starting order, index = slot in snapshots; seed = the map (rules/track.ts)
   | { t: 'pong'; c: number; s: number } // c: the ping's client clock, s: server clock (ms)
-  | { t: 'out'; id: string; reason: 'crash' | 'wall' | 'left'; place: number }
+  | { t: 'out'; id: string; reason: OutReason; place: number }
+  | { t: 'finish'; id: string; place: number; time: number } // a race: `id` crossed the line, `time` ms after the start
   | { t: 'winner'; id: string | null; ranking: Result[] } // ranking: winner first
   | Rtc;
 

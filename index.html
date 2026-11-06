@@ -34,8 +34,9 @@
       <div><span class="label">Ping</span> <b id="b-ping">—</b></div>
       <div title="UDP: cars and traffic over a WebRTC data channel. TCP: the WebSocket fallback (UDP blocked or not up yet)"><span class="label">Link</span> <b id="b-link">—</b></div>
       <div title="How far ahead of their last report rivals are predicted, and how much each report corrects them on average"><span class="label">Predict</span> <b id="b-net">—</b></div>
-      <div class="storm-meter"><span class="label">Storm</span> <b id="b-wall">0 m</b><div class="track"><div id="b-wall-bar"></div></div></div>
+      <div class="storm-meter"><span class="label" id="b-meter-label">Storm</span> <b id="b-wall">0 m</b><div class="track"><div id="b-wall-bar"></div></div></div>
     </div>
+    <div id="progress" class="progress" hidden><div class="progress-ticks" id="progress-ticks"></div><div class="progress-end" id="progress-end"></div></div>
     <div class="dash">
       <div class="gear" id="gear">1</div>
       <div>
@@ -70,15 +71,15 @@
       <button class="arrow" id="car-next" aria-label="Next car">›</button>
     </div>
     <p class="cta">Tap or press Space to drive</p>
-    <button class="text-btn" id="to-battle">Battle royale online (B)</button>
+    <button class="text-btn" id="to-battle">Online: battle royale or race (B)</button>
     <p class="label">← → choose car · in the car: ↑ W gas · ↓ S brake · ← → A D steer</p>
     <p class="label">Touch: hold left / right edge to steer, middle to brake</p>
     <p class="best">Best <span id="best-menu">0</span></p>
   </section>
 
   <section class="screen" id="screen-mp" hidden>
-    <h2>Battle royale</h2>
-    <p class="tagline">Up to 16 drivers. A storm chases the pack and keeps speeding up. Last one on the road wins.</p>
+    <h2>Online</h2>
+    <p class="tagline">Up to 16 drivers: a battle royale against the storm, or a race to the finish line. The host chooses.</p>
     <form id="mp-form" class="mp-form">
       <label for="mp-name">Your name</label>
       <input id="mp-name" maxlength="16" required autocomplete="nickname" pattern="[\p{L}\p{N} _.\-]{1,16}">
@@ -90,15 +91,42 @@
     <button class="text-btn" id="mp-back" type="button">Back (Esc)</button>
   </section>
 
-  <section class="screen" id="screen-lobby" hidden>
-    <p class="label">Room code</p>
-    <h2 class="code" id="lobby-code"></h2>
-    <ul class="players" id="lobby-players"></ul>
-    <button class="text-btn" id="lobby-spec" type="button"></button>
-    <p class="label" id="lobby-spec-info"></p>
-    <button class="text-btn primary" id="lobby-start">Start the race (Space)</button>
-    <p class="label" id="lobby-wait">Waiting for the host to start…</p>
-    <button class="text-btn" id="lobby-leave">Leave room (Esc)</button>
+  <section class="screen lobby-screen" id="screen-lobby" hidden>
+    <div class="lobby">
+      <header class="lobby-head">
+        <h2>Lobby</h2>
+        <button class="room-code" id="lobby-copy" type="button" title="Copy the room code">
+          <span class="room-code-label">Room</span>
+          <span class="room-code-value" id="lobby-code"></span>
+          <span class="room-code-copied" id="lobby-copied" aria-live="polite"></span>
+        </button>
+      </header>
+
+      <section class="lobby-block">
+        <h3 id="lobby-mode-name">Mode <small id="lobby-host-only">chosen by the host</small></h3>
+        <div class="events" id="lobby-modes" role="radiogroup" aria-labelledby="lobby-mode-name"></div>
+        <p class="event-rule" id="lobby-mode-hint"></p>
+      </section>
+
+      <section class="lobby-block">
+        <label class="figures" for="lobby-spec">
+          <span class="figures-name">Car figures</span>
+          <select id="lobby-spec"></select>
+          <span class="figures-hint">Power, weight, gearing and brakes. Everyone keeps the look of their own car.</span>
+        </label>
+      </section>
+
+      <section class="lobby-block">
+        <h3>Drivers <small id="lobby-count"></small></h3>
+        <ul class="grid-tiles" id="lobby-players"></ul>
+      </section>
+
+      <footer class="lobby-foot">
+        <button class="go-btn" id="lobby-start" type="button">Start race</button>
+        <p class="waiting" id="lobby-wait"></p>
+        <button class="text-btn" id="lobby-leave" type="button">Leave room (Esc)</button>
+      </footer>
+    </div>
   </section>
 
   <section class="screen" id="screen-out" hidden>

@@ -102,8 +102,11 @@ wss.on('connection', (ws, req) => {
     } else if (m.t === 'spec') {
       const car = m.car === null ? null : clean(m.car, 32, /^[a-z0-9-]{1,32}$/);
       if (car !== null || m.car === null) room.setSpec(id, car);
+    } else if (m.t === 'mode') {
+      if (m.mode === null || typeof m.mode === 'number') room.setMode(id, m.mode); // the room checks it is one of RACE_LENGTHS
     } else if (m.t === 'start') room.start(id);
     else if (m.t === 'out') room.eliminate(id, m.reason === 'wall' ? 'wall' : 'crash');
+    else if (m.t === 'finish' && Number.isFinite(m.at)) room.finish(id, m.at, performance.now());
   });
 
   ws.on('close', () => {

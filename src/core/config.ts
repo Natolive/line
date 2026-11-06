@@ -101,6 +101,13 @@ export const EVENTS = {
   announceSec: 3.5, // s the warning stays on screen
 };
 
+// The progress line on the right, online (rules/progress.ts): it zooms on the pack.
+export const PROGRESS = {
+  minSpan: 1000, // m of road it shows at least
+  pad: 150, // m of road kept beyond the first and last driver
+  tick: 100, // m between the marks that scroll down it as you drive
+};
+
 // Rear-view mirror: its frame warns of what comes up behind.
 export const MIRROR = {
   warnGap: 40, // m: a vehicle in my path behind, closing in, nearer than this lights the frame red (brighter the nearer)
@@ -147,7 +154,7 @@ export const TRACK = {
   straightStart: 500, // m straight from the start line: the grid and the garage sit there
 };
 
-// Beside the road: the land, tunnels, bridges and signs (rules/track.ts, world/road.ts, world/terrain.ts).
+// Beside the road: the land, tunnels, bridges and signs (rules/track.ts, world/road/, world/terrain.ts).
 export const ROADSIDE = {
   corridor: 16, // m from the centre line: road, shoulders and verge; the landscape starts beyond
   zoneMargin: 380, // m from a zone border inside which no tunnel or bridge starts (the landscape blends there)
@@ -164,6 +171,7 @@ export const ROADSIDE = {
   overpassClear: 6.3, // m under it (lorries are 4 m)
   gantryEvery: 700, // m between sign gantries
   chevronRadius: 900, // m: bends tighter than this get chevron signs on the outside
+  finishClear: 60, // m past a tunnel or bridge where a race's finish line stands, if its distance falls on one
 };
 
 // Impacts (rules/impact.ts): judged on how hard each car is jolted (its change of speed), as crash tests are.

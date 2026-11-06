@@ -28,9 +28,9 @@ Green gantries over the road tell you which area comes next and how far it is.
 
 At night, street lamps, lit windows and headlights come on.
 
-## Battle royale (online)
+## Online: battle royale or race
 
-Press `B` in the menu (or the Battle royale button), type your name and a room code.
+Press `B` in the menu (or the Online button), type your name and a room code.
 
 Share the room code: friends who type the same code join your room (up to 16 drivers).
 
@@ -44,7 +44,9 @@ Once you're out, you spectate: the camera rides with the nearest driver still ra
 
 The last driver on the road wins; everyone sees the final ranking, then `Space` goes back to the lobby.
 
-In the lobby, the host can put everyone on the same figures (power, weight, gearing, brakes) as one garage car, so only driving makes the difference; each player keeps the look of their own car.
+In the lobby, the host picks the mode: battle royale (above) or a race of 5, 10 or 20 km. In a race there is no storm: a chequered FINISH gantry stands at that distance (just past a tunnel or bridge if it falls on one). Wrecked drivers are out; finishers drive on. Once the winner is home, the others have 60 s to finish. The ranking puts finishers by time, then the others by how far they got.
+
+In the lobby, the host can also put everyone on the same figures (power, weight, gearing, brakes) as one garage car, so only driving makes the difference; each player keeps the look of their own car.
 
 To try it alone, open the game in two browser windows and join the same room code.
 
@@ -124,7 +126,7 @@ Build for production: `npm run build`
 ## Models
 
 There are no model files: every car and prop is built from scratch in code, as a low-poly arcade toy.
-Cars are in `src/world/vehicles/fleet.ts`, props (trees, rocks, buildings…) in `src/world/assets.ts`.
+Cars are in `src/world/vehicles/fleet.ts`, props (trees, rocks, buildings…) in `src/world/props/`, listed in `src/world/assets.ts`.
 
 To add a garage car: add one file in `src/data/cars/` (copy an existing car), list it in `src/data/cars/index.ts`, and give it a toy design in `PLAYERS` in `src/world/vehicles/fleet.ts`.
 

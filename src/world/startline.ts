@@ -1,5 +1,6 @@
 // The start line: a chequered strip across the road and a gantry over it with a START banner and two
-// traffic lights (red, amber, green from top to bottom) facing the grid.
+// traffic lights (red, amber, green from top to bottom) facing the grid. The finish line of a race is the same
+// gantry with a FINISH banner and no lights.
 import * as THREE from 'three';
 import { GUARDRAIL_X } from '../core/config.ts';
 import type { TrackView } from './track.ts';
@@ -34,7 +35,8 @@ export class StartLine {
   private lamps = COLORS.map((c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0, roughness: 0.3 }));
   private track: TrackView;
 
-  constructor(track: TrackView) {
+  /** `word`: written across the gantry; `lights`: hang the start lights. */
+  constructor(track: TrackView, word = 'START', lights = true) {
     this.track = track;
     const mat = (color: number) => new THREE.MeshStandardMaterial({ color, roughness: 0.6 });
     const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z = 0) => {
@@ -61,13 +63,13 @@ export class StartLine {
       g.font = '64px Bungee, "Chakra Petch", sans-serif';
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      g.fillText('START', 256, 52);
+      g.fillText(word, 256, 52);
     });
     add(new THREE.PlaneGeometry(6, 1.1), new THREE.MeshStandardMaterial({ map: banner, emissiveMap: banner, emissive: 0xffffff, emissiveIntensity: 0.25 }), 0, BEAM + 0.85, 0.26);
     add(new THREE.BoxGeometry(6.2, 1.3, 0.2), mat(0x22232a), 0, BEAM + 0.85, 0.12);
 
     // two traffic lights hanging from the beam, lenses facing the grid (+z), each under a little visor
-    for (const x of LIGHTS_X) {
+    for (const x of lights ? LIGHTS_X : []) {
       add(new THREE.BoxGeometry(0.1, 0.6, 0.1), mat(0x22232a), x, BEAM - 0.5);
       add(new THREE.BoxGeometry(0.95, 2.6, 0.6), mat(0x15151a), x, BEAM - 2.1);
       COLORS.forEach((_, i) => {
@@ -80,9 +82,10 @@ export class StartLine {
     this.lights(null);
   }
 
-  /** Stands the line at road position `d` (call after each new map: the curve changed). */
-  set(d: number) {
-    this.track.place(this.group, d, 0);
+  /** Stands the line at road position `d` (call after each new map: the curve changed); null takes it away. */
+  set(d: number | null) {
+    this.group.visible = d !== null;
+    if (d !== null) this.track.place(this.group, d, 0);
   }
 
   /**

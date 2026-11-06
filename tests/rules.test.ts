@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CARRIAGEWAY_HALF, EVENTS, MIRROR, GUARDRAIL_X, IMPACT, LANE_WIDTH, LANES, ROADSIDE, SHOULDER, START, TRACK, TRAFFIC, WALL } from '../src/core/config.ts';
 import { gridSlot } from '../src/rules/grid.ts';
+import { raceWindow, stormWindow } from '../src/rules/progress.ts';
 import { blocksIn, eventsIn } from '../src/rules/events.ts';
 import { MAX_PLAYERS } from '../src/net/protocol.ts';
 import { GARAGE } from '../src/data/cars/index.ts';
@@ -13,7 +14,7 @@ import { stepSpring } from '../src/rules/spring.ts';
 import { themeBlend, themeIndexAt } from '../src/rules/themes.ts';
 import { damageEffects, impact, joltDamage, massOf, railImpact, type Moving } from '../src/rules/impact.ts';
 import { floorHeight, terrainHeight, waterAt } from '../src/rules/terrain.ts';
-import { curvatureAt, frameAt, lateral, setSeed, structuresIn, structuresOf, tunnelShade } from '../src/rules/track.ts';
+import { curvatureAt, finishLineAt, frameAt, lateral, setSeed, structureAt, structuresIn, structuresOf, tunnelShade } from '../src/rules/track.ts';
 import { wallAt, wallSpeedAt } from '../src/rules/wall.ts';
 import { measure, pickGear, stepVehicle, type DriveInput, type VehicleState } from '../src/rules/vehicle.ts';
 
@@ -461,4 +462,32 @@ test('the mirror warns of a vehicle closing in behind in my path, the nearer the
   assert.equal(mirrorWarning(me, [{ ...car(5, 0, 40), d: me.d + 20 }]).danger, 0, 'ahead is not in the mirror');
   assert.ok(mirrorWarning(me, [car(100, 3.6, 50, true)]).police, 'a police car behind, any lane');
   assert.ok(!mirrorWarning(me, [car(MIRROR.policeRange + 10, 0, 50, true)]).police);
+});
+
+test('a race finish line stands at its distance, or just past the tunnel or bridge it would fall on, the same for everyone', () => {
+  setSeed(7);
+  let moved = 0;
+  for (let length = 1000; length <= 60_000; length += 500) {
+    const line = finishLineAt(length);
+    assert.equal(structureAt(line), null, `open road at ${line}`);
+    assert.ok(line >= length);
+    if (line > length) moved++;
+    assert.equal(finishLineAt(length), line);
+  }
+  assert.ok(moved > 0, 'some distances fall on a structure');
+});
+
+test('the race progress line zooms on the pack, from the start, and stops at the finish once the pack nears it', () => {
+  const span = (w: { lo: number; hi: number }) => w.hi - w.lo;
+  assert.deepEqual(raceWindow([0, -14, -28], 5000), { lo: 0, hi: 1000 }); // on the grid: never before the start
+  const alone = raceWindow([2500], 5000);
+  assert.equal(span(alone), 1000);
+  assert.equal((alone.lo + alone.hi) / 2, 2500); // alone: in the middle, the road scrolls by
+  const spread = raceWindow([1000, 3000], 5000);
+  assert.deepEqual(spread, { lo: 850, hi: 3150 }); // everyone in view, with some road around
+  const near = raceWindow([4700], 5000);
+  assert.equal(near.hi, 5150); // the finish line is in view, near the top
+  assert.ok(near.lo <= 4700 - 150);
+  assert.deepEqual(stormWindow([300, 800], 100), { lo: 100, hi: 1100 });
+  assert.deepEqual(stormWindow([300, 2000], 100), { lo: 100, hi: 2150 });
 });

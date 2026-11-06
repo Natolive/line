@@ -1,11 +1,11 @@
-// Battle royale: the online side of a race. Owns the connection, the room, the grid, the wall clock,
-// the rivals and eliminations; the Game asks it questions and reacts to its events.
+// The online side of a race, battle royale or a race to a finish line. Owns the connection, the room, the grid,
+// the race clock, the rivals, eliminations and arrivals; the Game asks it questions and reacts to its events.
 import type { TrackView } from '../world/track.ts';
 import { gridSlot } from '../rules/grid.ts';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
 import { due } from '../net/interp.ts';
-import { NET_HZ, type CarState, type PlayerInfo, type Result, type ServerMessage } from '../net/protocol.ts';
+import { NET_HZ, type CarState, type Mode, type PlayerInfo, type Result, type ServerMessage } from '../net/protocol.ts';
 import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
 import type { Traffic } from '../world/traffic.ts';
@@ -20,6 +20,7 @@ export type BattleEvents = {
   lobby(): void;
   go(slot: { d: number; x: number }, seed: number): void; // seed: the map of this race
   out(id: string, reason: string, place: number): void;
+  finish(id: string, place: number, time: number): void; // a race: `id` crossed the line `time` ms after the start
   winner(ranking: Result[]): void;
   error(message: string): void;
   closed(): void;
@@ -31,6 +32,7 @@ export class Battle {
   room = '';
   players: PlayerInfo[] = [];
   spec: string | null = null; // the room's setting: garage car id whose figures everyone drives with, or null
+  mode: Mode = null; // the room's setting: battle royale (null) or a race to a finish line this many m from the start
   readonly rivals: Rivals;
   private net = new Net();
   private traffic: Traffic;
@@ -84,9 +86,9 @@ export class Battle {
     return (performance.now() - this.startAt) / 1000;
   }
 
-  /** Where the storm wall is now, in meters along the road. */
+  /** Where the storm wall is now, in meters along the road (none in a race). */
   wall() {
-    return wallAt(this.raceTime());
+    return this.mode === null ? wallAt(this.raceTime()) : -Infinity;
   }
 
   /** The server's clock (ms), estimated from ping/pong. */
@@ -125,8 +127,18 @@ export class Battle {
     this.net.send({ t: 'spec', car });
   }
 
+  /** Host only: battle royale (null) or a race of `mode` m. */
+  setMode(mode: Mode) {
+    this.net.send({ t: 'mode', mode });
+  }
+
   start() {
     this.net.send({ t: 'start' });
+  }
+
+  /** A race: I crossed the finish line `early` ms before the frame being simulated. */
+  finished(early: number) {
+    this.net.send({ t: 'finish', at: this.frameNow() - early });
   }
 
   /** Publishes my car (NET_HZ, 19 bytes) and, as host, the traffic (30×/s), stamped with this frame's time; pings once a second. */
@@ -194,12 +206,14 @@ export class Battle {
         this.host = m.host;
         this.players = m.players;
         this.spec = m.spec;
+        this.mode = m.mode;
         this.traffic.remote = !this.isHost;
         return this.events.lobby();
       case 'lobby':
         this.host = m.host;
         this.players = m.players;
         this.spec = m.spec;
+        this.mode = m.mode;
         this.traffic.remote = !this.isHost; // the host leaving hands the traffic to the next player
         for (const id of this.rivals.all.keys()) if (!m.players.some((p) => p.id === id)) this.rivals.out(id);
         return this.events.lobby();
@@ -208,6 +222,7 @@ export class Battle {
       case 'go': {
         this.startAt = performance.now() + m.startsIn;
         this.grid = m.grid;
+        this.mode = m.mode;
         this.rivals.clear();
         m.grid.forEach((id, i) => {
           const p = this.players.find((q) => q.id === id), slot = gridSlot(i);
@@ -218,6 +233,8 @@ export class Battle {
       case 'out':
         this.rivals.out(m.id);
         return this.events.out(m.id, m.reason, m.place);
+      case 'finish':
+        return this.events.finish(m.id, m.place, m.time);
       case 'winner':
         this.startAt = Infinity;
         return this.events.winner(m.ranking);

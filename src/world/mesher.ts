@@ -81,6 +81,17 @@ export class Mesher {
     for (let i = 0; i < n - 1; i++) this.sweep(ds, (d) => profile(d).slice(i, i + 2), tile, v0);
   }
 
+  /** Adds a solid (built around its own origin, -z down the road) at road point (d, x, y). */
+  solid(geo: THREE.BufferGeometry, d: number, x: number, y: number) {
+    const p = geo.getAttribute('position'), n = geo.getAttribute('normal'), uv = geo.getAttribute('uv');
+    const before = this.vertexCount;
+    for (let i = 0; i < p.count; i++) {
+      this.vertex(d - p.getZ(i), x + p.getX(i), y + p.getY(i), uv.getX(i), uv.getY(i));
+      this.normal(n.getX(i), n.getY(i), -n.getZ(i), d);
+    }
+    this.indices(geo.index?.array ?? Array.from({ length: p.count }, (_, i) => i), before);
+  }
+
   geometry() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));

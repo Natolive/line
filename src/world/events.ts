@@ -5,7 +5,7 @@
 import * as THREE from 'three';
 import { EVENTS } from '../core/config.ts';
 import { eventsIn, type EventKind, type Thing, type ThingKind } from '../rules/events.ts';
-import { block, cone, part, post, prop, turn } from './assets.ts';
+import { block, cone, part, post, prop, turn } from './props/toy.ts';
 import { PieceFrame, Ring, type TrackView } from './track.ts';
 import { BEACON, type Fleet } from './vehicles/fleet.ts';
 import { setBlinker } from './vehicles/lights.ts';

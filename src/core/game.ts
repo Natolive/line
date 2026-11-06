@@ -1,28 +1,30 @@
 // Game state machine. Wires the systems together; owns score, distance and time.
-// Solo: drive until you crash. Battle royale (core/battle.ts): online, a storm wall chases the pack.
+// Solo: drive until you crash. Online (core/battle.ts): a battle royale where a storm wall chases the pack, or a
+// race to a finish line.
 import * as THREE from 'three';
 import { GARAGE } from '../data/cars/index.ts';
 import { THEMES } from '../data/themes.ts';
-import type { CarState } from '../net/protocol.ts';
+import { RACE_GRACE_MS, type CarState } from '../net/protocol.ts';
 import { Sfx } from '../platform/audio.ts';
 import { Input } from '../platform/input.ts';
 import { impact, massOf, type Hit } from '../rules/impact.ts';
 import { rectsOverlap } from '../rules/collision.ts';
 import { crashSeverity, shunt, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { mirrorWarning, multiplierFor } from '../rules/difficulty.ts';
+import { raceWindow, stormWindow } from '../rules/progress.ts';
 import { blocksIn, eventsIn, type EventKind } from '../rules/events.ts';
 import { themeBlend, themeIndexAt } from '../rules/themes.ts';
-import { curvatureAt, setSeed, tunnelShade } from '../rules/track.ts';
+import { curvatureAt, finishLineAt, setSeed, tunnelShade } from '../rules/track.ts';
 import { measure } from '../rules/vehicle.ts';
-import { Hud, type Screen } from '../ui/hud.ts';
+import { Hud, ordinal, raceClock, type ProgressView, type Screen } from '../ui/hud.ts';
 import type { World } from '../world/assets.ts';
 import { Effects } from '../world/effects.ts';
 import { Events } from '../world/events.ts';
 import { Environment } from '../world/environment.ts';
 import { Player } from '../world/player.ts';
 import type { Rival } from '../world/rivals.ts';
-import { Road } from '../world/road.ts';
-import { Scenery } from '../world/scenery.ts';
+import { Road } from '../world/road/road.ts';
+import { Scenery } from '../world/scenery/scenery.ts';
 import { Smoke } from '../world/smoke.ts';
 import { Stage } from '../world/stage.ts';
 import { StartLine } from '../world/startline.ts';
@@ -48,6 +50,9 @@ export class Game {
   private env: Environment;
   private scenery: Scenery;
   private startLine: StartLine;
+  private finishLine: StartLine;
+  private goal: number | null = null; // a race: road position of the finish line on this map
+  private home: { place: number; time: number } | null = null; // a race: I crossed the line
   private events: Events;
   private announced = new Set<number>(); // road events already announced this race
   private lightsLeft = 0; // s before green, on the solo grid
@@ -87,6 +92,8 @@ export class Game {
     this.terrain = new Terrain(this.track, this.road.asphalt);
     this.scenery = new Scenery(this.track, world);
     this.startLine = new StartLine(this.track);
+    this.finishLine = new StartLine(this.track, 'FINISH', false);
+    this.finishLine.set(null);
     this.events = new Events(this.track, fleet);
     this.startLine.set(START.line);
     this.view(0);
@@ -124,9 +131,10 @@ export class Game {
       join: (name, room) => this.join(name, room),
       start: () => this.battle?.start(),
       leave: () => this.leaveBattle(),
-      spec: () => this.cycleSpec(),
+      spec: (car) => { if (this.battle?.isHost) this.battle.setSpec(car); },
+      mode: (mode) => { if (this.battle?.isHost) this.battle.setMode(mode); },
       back: () => this.action(),
-    });
+    }, GARAGE.map((c) => ({ id: c.id, name: c.name, model: c.model })));
     this.hud.setName(load(NAME_KEY) ?? '');
     document.addEventListener('visibilitychange', () => {
       if (document.hidden && this.state === 'play' && !this.battle) this.setState('pause'); // online races don't pause
@@ -222,6 +230,10 @@ export class Game {
     this.zone = themeIndexAt(d, THEMES.length);
     this.startLine.set(START.line);
     this.startLine.lights(START.red + START.amber, START.amber);
+    const race = this.battle?.mode ?? null; // after setSeed: the line depends on the map
+    this.goal = race === null ? null : finishLineAt(race);
+    this.home = null;
+    this.finishLine.set(this.goal);
     this.view();
     this.player.reset(0, x);
     this.traffic.reset(this.me);
@@ -256,22 +268,34 @@ export class Game {
         lobby: () => {
           if (this.state === 'mp') this.setState('lobby');
           const b = this.battle!;
-          this.hud.setLobby(b.room, b.players, b.host, b.me, specCar(b.spec)?.name ?? null);
+          this.hud.setLobby(b.room, b.players, b.host, b.me, b.spec, b.mode);
         },
         go: (slot, seed) => {
           const spec = specCar(this.battle!.spec);
           this.startRace(slot.d, slot.x, spec, seed);
           if (spec) this.hud.popup(`Everyone drives with ${spec.name} figures`);
-          this.hud.setBattle({ alive: this.battle!.players.length, total: this.battle!.players.length, wall: this.dist - this.battle!.wall(), place: 0, ping: this.battle!.ping, udp: this.battle!.udp, ...this.battle!.link });
+          if (this.goal !== null) this.hud.popup(`Race to the finish line · ${(this.goal / 1000).toFixed(1)} km`);
+          this.hud.setBattle(this.battleStats());
+          this.hud.setProgress(this.progress());
           this.setState('countdown');
         },
         out: (id, reason, place) => {
           const b = this.battle!;
-          this.hud.popup(id === b.me ? `Out · ${ordinal(place)}` : `${b.nameOf(id)} ${reason === 'wall' ? 'caught by the storm' : reason === 'left' ? 'left' : 'crashed'}`);
+          const how = { wall: 'caught by the storm', left: 'left', late: 'too late to finish' }[reason] ?? 'crashed';
+          this.hud.popup(id === b.me ? `Out · ${ordinal(place)}` : `${b.nameOf(id)} ${how}`);
           if (id === b.me) this.hud.setEliminated(place, reason);
         },
+        finish: (id, place, time) => {
+          const b = this.battle!;
+          if (id === b.me) {
+            this.home = { place, time };
+            this.hud.setFinished(place, time);
+            this.hud.popup(`Finished · ${ordinal(place)} · ${raceClock(time)}`, 4);
+          } else this.hud.popup(`${b.nameOf(id)} finished ${ordinal(place)} · ${raceClock(time)}`);
+          if (place === 1 && id !== b.me && !this.home) this.hud.popup(`${RACE_GRACE_MS / 1000} s left to finish`, 4);
+        },
         winner: (ranking) => {
-          this.hud.setResults(ranking, this.battle!.me);
+          this.hud.setResults(ranking, this.battle!.me, this.battle!.mode);
           this.sfx.silenceLoops();
           this.setState('results');
         },
@@ -295,17 +319,11 @@ export class Game {
     this.battle?.leave();
     this.battle = null;
     this.player.spec = null;
+    this.goal = null;
+    this.finishLine.set(null);
     this.cruiseFrom(); // back from wherever spectating left the wreck, rolling again
     this.traffic.reset(this.me);
     if (toMenu) this.setState('menu');
-  }
-
-  /** Host, in the lobby: each their own car figures → everyone on the first garage car's → the next's → … → back. */
-  private cycleSpec() {
-    const b = this.battle;
-    if (!b?.isHost) return;
-    const options = [null, ...GARAGE.map((c) => c.id)];
-    b.setSpec(options[(options.indexOf(b.spec) + 1) % options.length]);
   }
 
   // ---- spectating ----
@@ -446,6 +464,7 @@ export class Game {
           }
           b.publish(dt, null);
           this.hud.setBattle(this.battleStats());
+          this.hud.setProgress(this.progress());
         }
         const wreck = this.placeWreck();
         // traffic stops for the wreck where it is now, and can't drive through it
@@ -514,6 +533,11 @@ export class Game {
     this.time += dt;
     this.dist += forward;
     this.score += forward * mult;
+    if (b && this.goal !== null && !this.home && this.dist >= this.goal && forward > 0) {
+      // crossed the finish line during this frame: tell the server when exactly; the car drives on
+      b.finished(((this.dist - this.goal) / forward) * dt * 1000);
+      this.home = { place: 0, time: 0 }; // until the server confirms
+    }
 
     this.fx.update(dt, forward);
     this.smoke.update(dt, forward);
@@ -553,6 +577,7 @@ export class Game {
       b.sync(dt, this.dist);
       b.publish(dt, this.carState());
       this.hud.setBattle(this.battleStats());
+      this.hud.setProgress(this.progress());
       if (this.dist < b.wall()) return this.crash('wall');
     }
     if (this.state === 'play') this.knocks();
@@ -576,11 +601,24 @@ export class Game {
     for (const news of this.traffic.news.splice(0)) this.hud.popup(news, EVENTS.announceSec);
   }
 
+  /** The progress line: every driver, on a stretch of road zoomed on the pack (rules/progress.ts). */
+  private progress(): ProgressView {
+    const b = this.battle!, mine = this.state === 'play' ? this.dist : this.wreckD + (this.player.wreck?.s ?? 0);
+    const drivers = [
+      { id: b.me, name: 'You', d: mine, me: true, out: this.state !== 'play' && !this.home },
+      ...[...b.rivals.all.values()].map((r) => ({ id: r.info.id, name: r.info.name, d: r.d, me: false, out: !r.alive })),
+    ];
+    const racing = drivers.filter((d) => !d.out).map((d) => d.d), ds = racing.length ? racing : [mine];
+    const w = this.goal === null ? stormWindow(ds, b.wall()) : raceWindow(ds, this.goal);
+    return { ...w, drivers, goal: this.goal, storm: this.goal === null };
+  }
+
   private battleStats() {
     const b = this.battle!, rivals = [...b.rivals.all.values()];
     const alive = rivals.filter((r) => r.alive).length + (this.state === 'play' ? 1 : 0);
-    const place = 1 + rivals.filter((r) => r.alive && r.d > this.dist).length;
-    return { alive, total: rivals.length + 1, wall: this.dist - b.wall(), place: this.state === 'play' ? place : 0, ping: b.ping, udp: b.udp, ...b.link };
+    const place = this.home?.place || 1 + rivals.filter((r) => r.alive && r.d > this.dist).length;
+    const goal = this.goal === null ? null : { left: this.goal - this.dist, length: this.goal, time: Math.max(0, b.raceTime() * 1000) };
+    return { alive, total: rivals.length + 1, wall: this.dist - b.wall(), goal, place: this.state === 'play' ? place : 0, ping: b.ping, udp: b.udp, ...b.link };
   }
 
   /** Draws the wreck where it is on the road (it slides on along the curve), relative to the view. */
@@ -667,7 +705,6 @@ const newSeed = () => Math.floor(Math.random() * 2 ** 32);
 /** The garage car a room's `spec` names (see Battle.spec), if any. */
 const specCar = (id: string | null) => (id ? GARAGE.find((c) => c.id === id) ?? null : null);
 
-const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
 
 // localStorage can throw (private mode, blocked storage): then choices last this session only.
 function load(key: string) {

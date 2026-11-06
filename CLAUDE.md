@@ -54,7 +54,9 @@ Lanes are indexed 0 (left, fast) to 3 (right, slow).
 
 Sky, sun, fog and reflections blend in `world/environment.ts`: a painted gradient sky per theme (no photos), fog the colour of its horizon, reflections rendered from that sky. They turn with the road's heading, and give way to the lamps inside tunnels (`tunnelShade`).
 
-Scenery fills 40 m sections far ahead in the fog (`world/scenery.ts`), standing on the land (`terrainHeight`); never spawn props in view.
+Scenery fills 40 m sections far ahead in the fog (`world/scenery/`), standing on the land (`terrainHeight`); never spawn props in view. Each landscape kind is one function in `LANDSCAPES` (`scenery/landscapes.ts`) that places props through a `Plot` (`scenery/plot.ts`: dice from the seed, `put`, `scatter`, `landmark`).
+
+The road is built in 80 m pieces by `world/road/road.ts`, one module per part (`carriageway`, `tunnel`, `bridges`, `overpass`), each a function of the piece's `Build` context and the shared `RoadPaints`.
 
 Each theme also sets its colours (ground, rock, water, `tint` for props), its land (`relief`, snow line), its bends (`curves`) and what the road meets (`structures`: tunnels, viaducts, a lake bridge, overpasses, noise walls). Lengths and sizes of those live in `ROADSIDE` and `TRACK` (`core/config.ts`).
 
@@ -86,6 +88,8 @@ Everything shared is in road coordinates (`d` = meters from the start line), nev
 
 The storm wall is a pure function of race time (`rules/wall.ts`): never send it over the network.
 
+A room's `mode` is a battle royale (null) or a race to one of `RACE_LENGTHS`. In a race the finish line stands at `finishLineAt()` (`rules/track.ts`, moved past a tunnel or bridge); each game reports its own crossing with the server time of that moment, and the server believes it only if the driver's last reported `d` is near the line.
+
 ## Code rules
 
 Keep it small: no abstraction until a second use exists.
@@ -112,7 +116,7 @@ Before finishing a change: `npm run typecheck && npm test && npm run build`.
 
 ## Models
 
-No model files: every car and prop is built from scratch in code as a low-poly toy. Cars in `world/vehicles/fleet.ts` (a `Design` per car: real length, width, height, plus colour and shape), props in `world/assets.ts` (one builder each, at real size).
+No model files: every car and prop is built from scratch in code as a low-poly toy. Cars in `world/vehicles/fleet.ts` (a `Design` per car: real length, width, height, plus colour and shape), props in `world/props/` by family (`nature`, `country`, `town`, `water`; one builder each, at real size, from the `toy.ts` kit), listed in the catalogue `world/assets.ts`.
 
 Add detail freely: every prop and car is merged into one mesh per colour at build time (`merge()` in `world/arcade.ts`), so parts cost nothing per frame. Only what moves stays apart (turbine `blades`, `wheel`s, `taillight`s).
 
