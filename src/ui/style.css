@@ -38,6 +38,7 @@ html, body {
 .score { font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .label { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); line-height: 1.8; }
 .hud-right { display: flex; gap: 12px; align-items: center; }
+@media (max-width: 620px) { .hud-right .label { display: none; } } /* a phone held upright: the mirror needs the room */
 
 .mult {
   display: inline-block;
@@ -154,6 +155,9 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  justify-content: safe center; /* too tall (a phone held sideways): starts at the top and scrolls, never cut off */
+  overflow-y: auto;
+  touch-action: pan-y;
   gap: 6px;
   padding: 16px;
   text-align: center;
@@ -273,16 +277,25 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
 .loading { background: var(--ink); gap: 18px; }
 
 /* garage: the 3D car orbits behind this card */
-.menu { justify-content: flex-end; padding-bottom: max(28px, env(safe-area-inset-bottom)); background: linear-gradient(rgb(15 18 24 / 0.35), rgb(15 18 24 / 0) 30%, rgb(15 18 24 / 0) 45%, rgb(15 18 24 / 0.85)); }
+.menu { justify-content: flex-end; justify-content: safe flex-end; padding-bottom: max(28px, env(safe-area-inset-bottom)); background: linear-gradient(rgb(15 18 24 / 0.35), rgb(15 18 24 / 0) 30%, rgb(15 18 24 / 0) 45%, rgb(15 18 24 / 0.85)); }
 .menu h1 { position: absolute; top: max(24px, env(safe-area-inset-top)); left: 0; right: 0; font-size: clamp(56px, 12vw, 110px); }
 .menu .tagline { text-shadow: 0 1px 8px rgb(0 0 0 / 0.55); position: absolute; top: calc(max(24px, env(safe-area-inset-top)) + clamp(56px, 12vw, 110px)); left: 0; right: 0; }
 .garage { display: flex; align-items: center; gap: 12px; }
-.car-card { min-width: min(380px, 64vw); padding: 14px 20px; border-radius: 12px; background: var(--glass); backdrop-filter: blur(6px); }
+.car-card { min-width: min(380px, calc(100vw - 192px)); max-width: calc(100vw - 192px); padding: 14px 20px; border-radius: 12px; background: var(--glass); backdrop-filter: blur(6px); }
 .car-name { font-size: 26px; font-weight: 700; font-style: italic; text-transform: uppercase; letter-spacing: 0.04em; }
 .car-spec { font-size: 13px; margin-top: 8px; }
 .car-spec.muted { color: var(--muted); margin-top: 10px; }
 .car-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 10px 0 0; }
 @media (max-width: 420px) { .car-stats { grid-template-columns: repeat(2, 1fr); } }
+@media (pointer: coarse) { .menu .keys { display: none; } } /* a phone has no keyboard */
+@media (max-height: 700px) { .menu .tagline { display: none; } } /* the car card would cover it */
+/* phone held sideways: no room for the title, the keyboard hints or the chassis line */
+@media (max-height: 520px) {
+  .menu h1, .menu .tagline, .menu > .label, #car-chassis { display: none; }
+  .menu .cta { margin: 8px 0 6px !important; }
+  .menu .best { margin-top: 4px !important; }
+  #screen-mp .tagline { display: none; }
+}
 .car-stats dt { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .car-stats dd { margin: 2px 0 0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .arrow, .text-btn {
@@ -452,8 +465,8 @@ h1, #zone, #countdown { text-shadow: 3px 3px 0 var(--accent), 6px 6px 0 rgb(0 0 
 .waiting { font-size: 17px; color: var(--muted); }
 .waiting::after { content: '…'; animation: pulse 1.4s ease-in-out infinite; }
 
+@media (max-width: 800px) { .events { grid-template-columns: repeat(2, minmax(0, 1fr)); } } /* four cards in a row cut "20 km" short */
 @media (max-width: 620px) {
-  .events { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .event { min-height: 112px; }
   .event-big { font-size: 46px; }
   .event.storm .event-big { font-size: 32px; }
