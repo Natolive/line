@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CARRIAGEWAY_HALF, GUARDRAIL_X, IMPACT, LANES, ROADSIDE, SHOULDER, TRACK, TRAFFIC, WALL } from '../src/core/config.ts';
+import { CARRIAGEWAY_HALF, EVENTS, GUARDRAIL_X, IMPACT, LANE_WIDTH, LANES, ROADSIDE, SHOULDER, START, TRACK, TRAFFIC, WALL } from '../src/core/config.ts';
+import { gridSlot } from '../src/rules/grid.ts';
+import { blocksIn, eventsIn } from '../src/rules/events.ts';
+import { MAX_PLAYERS } from '../src/net/protocol.ts';
 import { GARAGE } from '../src/data/cars/index.ts';
 import { THEMES, TRANSITION_LENGTH, ZONE_LENGTH } from '../src/data/themes.ts';
 import { rectsOverlap } from '../src/rules/collision.ts';
@@ -10,7 +13,7 @@ import { stepSpring } from '../src/rules/spring.ts';
 import { themeBlend, themeIndexAt } from '../src/rules/themes.ts';
 import { damageEffects, impact, joltDamage, massOf, railImpact, type Moving } from '../src/rules/impact.ts';
 import { floorHeight, terrainHeight, waterAt } from '../src/rules/terrain.ts';
-import { curvatureAt, frameAt, lateral, setSeed, structuresOf, tunnelShade } from '../src/rules/track.ts';
+import { curvatureAt, frameAt, lateral, setSeed, structuresIn, structuresOf, tunnelShade } from '../src/rules/track.ts';
 import { wallAt, wallSpeedAt } from '../src/rules/wall.ts';
 import { measure, pickGear, stepVehicle, type DriveInput, type VehicleState } from '../src/rules/vehicle.ts';
 
@@ -222,14 +225,14 @@ test('the road is one smooth curve: each meter of road is a meter long and turns
 
 test('bends are never tighter than their landscape allows, and some landscapes bend more', () => {
   const tightest = new Map<string, number>();
-  for (let d = 0; d < 8 * ZONE_LENGTH * 3; d += 25) {
+  for (let d = 0; d < THEMES.length * ZONE_LENGTH * 3; d += 25) {
     const k = Math.abs(curvatureAt(d));
     if (!k) continue;
     const theme = THEMES[themeIndexAt(Math.floor(d / TRACK.piece) * TRACK.piece + TRACK.piece / 2, THEMES.length)];
     assert.ok(1 / k >= theme.curves.minRadius - 1e-6, `radius ${Math.round(1 / k)} m in ${theme.id}`);
     tightest.set(theme.id, Math.min(tightest.get(theme.id) ?? Infinity, 1 / k));
   }
-  assert.ok(tightest.get('mountains')! < tightest.get('farmland')!);
+  assert.ok(tightest.get('mountains')! < tightest.get('candy')!);
 });
 
 test('the inside of a bend is squeezed far out, never folded', () => {
@@ -265,7 +268,7 @@ test('in a bend, a car going straight drifts to the outside; steering holds the 
 
 test('tunnels and bridges fit inside their zone, apart from each other, as their landscape asks', () => {
   const kinds = new Map<string, number>();
-  for (let z = 0; z < 8 * 6; z++) {
+  for (let z = 0; z < THEMES.length * 6; z++) {
     const list = structuresOf(z), theme = THEMES[themeIndexAt(z * ZONE_LENGTH, THEMES.length)];
     for (const [i, s] of list.entries()) {
       assert.ok(s.from >= z * ZONE_LENGTH + ROADSIDE.zoneMargin && s.to <= (z + 1) * ZONE_LENGTH - ROADSIDE.zoneMargin);
@@ -388,4 +391,43 @@ test('damage takes power and pulls the car once it is bad; one more big knock an
     hits++;
   }
   assert.ok(hits >= 2 && hits <= 6, `${hits} medium knocks wreck a car`);
+});
+
+test('every player of a full room gets their own place on the grid, behind the line and clear of the storm', () => {
+  const LONGEST = 5.5; // m: longer than any garage car (the Veneno is 5.02 m)
+  const slots = Array.from({ length: MAX_PLAYERS }, (_, i) => gridSlot(i));
+  assert.equal(new Set(slots.map((s) => `${s.d}:${s.x}`)).size, MAX_PLAYERS, 'no two players share a slot');
+  for (const s of slots) {
+    assert.ok(LANES.includes(s.x), 'each car stands in the middle of a lane');
+    assert.ok(s.d + LONGEST / 2 < START.line, 'every nose is behind the start line');
+    assert.ok(s.d - WALL.startD > 100, 'the back row starts well ahead of the storm');
+  }
+  // cars one behind the other in a lane have room between them
+  for (const a of slots) for (const b of slots) if (a !== b && a.x === b.x) assert.ok(Math.abs(a.d - b.d) >= LONGEST + 3);
+  assert.equal(Math.max(...slots.map((s) => s.d)), 0, 'the front row is at d = 0');
+});
+
+test('road events: the same for every player, never in the way of the start, a tunnel or a bridge, never closing every lane', () => {
+  setSeed(4242);
+  const all = eventsIn(0, 200000);
+  assert.deepEqual(eventsIn(0, 200000), all, 'the same map gives the same events');
+  const kinds = new Set(all.map((e) => e.kind));
+  assert.deepEqual([...kinds].sort(), ['accident', 'load', 'works'], 'all three kinds happen');
+  for (const [i, e] of all.entries()) {
+    assert.ok(e.from >= EVENTS.firstAt, 'nothing near the start');
+    assert.ok(e.lanes.length >= 1 && e.lanes.length < LANES.length - 1, 'at least two lanes stay open');
+    assert.equal(structuresIn(e.from - EVENTS.signsAhead[0] - 20, e.to + 20).length, 0, 'no event in a tunnel or on a bridge');
+    if (i) assert.ok(e.from - EVENTS.signsAhead[0] > all[i - 1].to, 'events never overlap');
+    for (const t of e.things) assert.ok(Math.abs(t.x) < GUARDRAIL_X, 'everything stands between the rails');
+    // what blocks a lane stands in it, inside the event (signs and the triangle come before it)
+    for (const t of e.things.filter((t) => !['sign', 'triangle', 'truck'].includes(t.kind))) {
+      assert.ok(t.d >= e.from - 1 && t.d <= e.to + 1, `${t.kind} inside its event`);
+    }
+  }
+  // traffic sees exactly the closed lanes, and only there
+  const works = all.find((e) => e.kind === 'works')!, mid = (works.from + works.to) / 2;
+  assert.deepEqual(blocksIn(mid, mid).map((b) => b.lane).sort(), [...works.lanes].sort());
+  // the cones line the closure: the open lanes beside it are free of them
+  const open = LANES.filter((_, i) => !works.lanes.includes(i));
+  for (const c of works.things.filter((t) => t.kind === 'cone')) for (const x of open) assert.ok(Math.abs(c.x - x) > LANE_WIDTH / 2 - 0.1);
 });

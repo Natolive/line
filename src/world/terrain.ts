@@ -6,7 +6,6 @@ import { THEMES, ZONE_LENGTH, type Theme } from '../data/themes.ts';
 import { floorHeight, smooth, terrainHeight, waterLevel } from '../rules/terrain.ts';
 import { themeIndexAt } from '../rules/themes.ts';
 import { overpassesIn, rowsIn, structuresIn } from '../rules/track.ts';
-import type { World } from './assets.ts';
 import { Mesher } from './mesher.ts';
 import { PieceFrame, Ring, type TrackView } from './track.ts';
 
@@ -29,46 +28,37 @@ export function themePair(d0: number) {
   return { a, b, blend: (d: number) => smooth(border - 40, border + 40, d) };
 }
 
+const SNOW = 0xf4f8ff, STRIPE = 16; // m: land is mowed in bands, half of them a shade darker
 const materials = new Map<string, THREE.MeshStandardMaterial>();
-/** Land material between themes `a` and `b`: their ground, rock where it is steep, snow above the snow line. */
-export function landMaterial(world: World, a: Theme, b: Theme) {
+/** Land material between themes `a` and `b`: flat colours, faceted, rock where it is steep, snow above the snow line. */
+export function landMaterial(a: Theme, b: Theme) {
   const key = `${a.id}>${b.id}`;
   let m = materials.get(key);
   if (m) return m;
-  const s = world.surfaces;
+  const color = (hex: number) => ({ value: new THREE.Color(hex) });
   const u = {
-    groundB: { value: s[b.ground].map }, rockA: { value: s[a.rock].map }, rockB: { value: s[b.rock].map }, snowMap: { value: s.snow_02.map },
-    tintA: { value: new THREE.Color(a.groundTint) }, tintB: { value: new THREE.Color(b.groundTint) },
-    rockTintA: { value: new THREE.Color(a.rockTint) }, rockTintB: { value: new THREE.Color(b.rockTint) },
+    groundA: color(a.ground), groundB: color(b.ground), rockA: color(a.rock), rockB: color(b.rock), snowColor: color(SNOW),
     snowA: { value: a.snowLine }, snowB: { value: b.snowLine },
   };
   // pushed back in depth so the road and verges laid over it always win
-  m = new THREE.MeshStandardMaterial({ map: s[a.ground].map, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  m = new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, u);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float blend;\nvarying float vBlend, vUp, vH;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBlend = blend; vUp = normal.y; vH = position.y;');
+      .replace('#include <common>', '#include <common>\nattribute float blend;\nvarying float vBlend, vUp, vH, vD;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\nvBlend = blend; vUp = normal.y; vH = position.y; vD = uv.y * ${TILE.toFixed(1)};`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform sampler2D groundB, rockA, rockB, snowMap;
-        uniform vec3 tintA, tintB, rockTintA, rockTintB;
+        uniform vec3 groundA, groundB, rockA, rockB, snowColor;
         uniform float snowA, snowB;
-        varying float vBlend, vUp, vH;`)
+        varying float vBlend, vUp, vH, vD;`)
       .replace('#include <map_fragment>', `
-        vec2 tuv = vMapUv;
-        // each texture at two scales, the larger one turned: no visible tiling grid
-        vec2 big = mat2(0.8, 0.6, -0.6, 0.8) * tuv * 0.21;
-        float macro = texture2D(map, tuv * 0.0613).g;
-        float steep = smoothstep(0.84, 0.64, vUp); // rock on slopes steeper than ~35°
-        vec3 ga = 0.5 * (texture2D(map, tuv).rgb + texture2D(map, big).rgb), gb = 0.5 * (texture2D(groundB, tuv).rgb + texture2D(groundB, big).rgb);
-        vec3 ra = 0.5 * (texture2D(rockA, tuv * 0.5).rgb + texture2D(rockA, big * 0.6).rgb), rb = 0.5 * (texture2D(rockB, tuv * 0.5).rgb + texture2D(rockB, big * 0.6).rgb);
-        vec3 a = mix(ga * tintA, ra * rockTintA, steep);
-        vec3 b = mix(gb * tintB, rb * rockTintB, steep);
+        float steep = step(vUp, 0.78); // rock on slopes steeper than ~38°
+        vec3 col = mix(mix(groundA, groundB, vBlend), mix(rockA, rockB, vBlend), steep);
+        col *= 1.0 - 0.07 * step(0.5, fract(vD / ${(STRIPE * 2).toFixed(1)}));
         float line = mix(snowA, snowB, vBlend);
-        float snow = smoothstep(line, line + 25.0, vH) * smoothstep(0.5, 0.75, vUp);
-        vec3 col = mix(mix(a, b, vBlend), texture2D(snowMap, tuv * 0.7).rgb * 1.15, snow);
-        diffuseColor.rgb *= col * (0.8 + 0.4 * macro);`);
+        col = mix(col, snowColor, step(line, vH) * step(0.6, vUp));
+        diffuseColor.rgb *= col;`);
   };
   m.customProgramCacheKey = () => 'land';
   materials.set(key, m);
@@ -76,7 +66,7 @@ export function landMaterial(world: World, a: Theme, b: Theme) {
 }
 
 /** Gently rippling water: a procedural normal map, scrolled over time. */
-function waterMaterial() {
+function ripples() {
   const n = 256, canvas = document.createElement('canvas');
   canvas.width = canvas.height = n;
   const g = canvas.getContext('2d')!, img = g.createImageData(n, n);
@@ -96,20 +86,32 @@ function waterMaterial() {
   g.putImageData(img, 0, 0);
   const normalMap = new THREE.CanvasTexture(canvas);
   normalMap.wrapS = normalMap.wrapT = THREE.RepeatWrapping;
-  return new THREE.MeshStandardMaterial({ color: 0x1e3b44, roughness: 0.06, metalness: 0.2, normalMap, normalScale: new THREE.Vector2(0.35, 0.35) });
+  return normalMap;
+}
+
+const waters = new Map<string, THREE.MeshStandardMaterial>();
+/** Each world's water: its own colour, glowing for lava and toxic pools. */
+function waterMaterial(t: Theme, normalMap: THREE.Texture) {
+  let m = waters.get(t.id);
+  if (!m) {
+    const { color, glow } = t.water;
+    m = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: glow, roughness: 0.1, metalness: 0.1, normalMap, normalScale: new THREE.Vector2(0.35, 0.35) });
+    waters.set(t.id, m);
+  }
+  return m;
 }
 
 type Piece = { group: THREE.Group; geos: THREE.BufferGeometry[] };
 
 export class Terrain {
   private ring: Ring<Piece>;
-  private water = waterMaterial();
+  private ripples = ripples();
   private asphalt: THREE.Material;
 
-  constructor(track: TrackView, world: World, asphalt: THREE.Material) {
+  constructor(track: TrackView, asphalt: THREE.Material) {
     this.asphalt = asphalt;
     this.ring = new Ring<Piece>(LEN, BEHIND, AHEAD, (d0) => {
-      const p = this.build(world, d0);
+      const p = this.build(d0);
       track.place(p.group, d0, 0);
       track.root.add(p.group);
       return p;
@@ -126,11 +128,11 @@ export class Terrain {
 
   update(d: number, dt = 0) {
     this.ring.update(d);
-    this.water.normalMap!.offset.x += dt * 0.004;
-    this.water.normalMap!.offset.y += dt * 0.006;
+    this.ripples.offset.x += dt * 0.004;
+    this.ripples.offset.y += dt * 0.006;
   }
 
-  private build(world: World, d0: number): Piece {
+  private build(d0: number): Piece {
     const pf = new PieceFrame(d0), d1 = d0 + LEN, ds = rowsIn(d0, d1, ROW);
     const { a, b, blend } = themePair(d0), group = new THREE.Group(), geos: THREE.BufferGeometry[] = [];
     const add = (m: Mesher, mat: THREE.Material, shadow = true) => {
@@ -164,7 +166,7 @@ export class Terrain {
       }
       land.grid(ds.length, 3);
     }
-    add(land, landMaterial(world, a, b));
+    add(land, landMaterial(a, b));
 
     const water = new Mesher(pf), wet = near.find((s) => s.water);
     if (wet) {
@@ -172,7 +174,7 @@ export class Terrain {
       for (const d of [d0, d0 + LEN / 2, d1]) for (const x of xs) water.vertex(d, x, y, x / 40, texV(d0, d) / 40);
       water.grid(3, xs.length);
     }
-    add(water, this.water);
+    add(water, waterMaterial(a, this.ripples));
 
     // the local roads that cross on overpasses run on along their embankments
     const lane = new Mesher(pf);

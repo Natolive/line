@@ -121,23 +121,12 @@ Run the tests: `npm test`
 
 Build for production: `npm run build`
 
-## Assets
+## Models
 
-Cars, traffic, buildings and trees are real 3D models from Sketchfab, licensed CC-BY.
+There are no model files: every car and prop is built from scratch in code, as a low-poly arcade toy.
+Cars are in `src/world/vehicles/fleet.ts`, props (trees, rocks, buildings…) in `src/world/assets.ts`.
 
-Skies (HDRI photos) and ground and road textures come from Poly Haven, licensed CC0.
-
-Authors and links are in `public/models/CREDITS.md`; keep that file when you ship.
-
-To re-download them, put your Sketchfab API token in `.env.local` as `SKETCHFAB_TOKEN=...`.
-
-Then run: `node scripts/fetch-assets.mjs` (it fetches Poly Haven files too, no account needed).
-
-To swap a model, change its id at the top of `scripts/fetch-assets.mjs`, delete the old `.glb`, and run the script again.
-
-To add a garage car: add its model to `MODELS` in the fetch script, add one file in `src/data/cars/` (copy an existing car), list it in `src/data/cars/index.ts`, and describe its model file in `PLAYER_SPECS` in `src/world/vehicles/fleet.ts`.
-
-A model is usable only if Sketchfab shows a Download button and a CC0 or CC Attribution license; "Editorial" or no license means no.
+To add a garage car: add one file in `src/data/cars/` (copy an existing car), list it in `src/data/cars/index.ts`, and give it a toy design in `PLAYERS` in `src/world/vehicles/fleet.ts`.
 
 ## Project layout
 

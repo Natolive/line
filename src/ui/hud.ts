@@ -11,14 +11,8 @@ export type Result = { score: number; best: number; isNew: boolean; km: number; 
 const $ = (id: string) => document.getElementById(id)!;
 const fmt = new Intl.NumberFormat('en');
 
-/** Loading screen progress, 0..1. Runs before the Hud exists. */
-export function showLoading(fraction: number) {
-  const pct = Math.round(fraction * 100);
-  $('load-bar').style.width = `${pct}%`;
-  $('load-pct').textContent = `${pct}%`;
-}
-
 export class Hud {
+  private goTimer = 0;
   private hud = $('hud');
   private screens: Record<Exclude<Screen, 'play' | 'countdown'>, HTMLElement> = {
     menu: $('screen-menu'),
@@ -124,10 +118,15 @@ export class Hud {
     vignette.style.opacity = String(danger * 0.85);
   }
 
-  countdown(n: number) {
-    const el = $('countdown');
-    el.hidden = n <= 0;
-    el.textContent = String(n);
+  /** On the grid, `left` seconds before the start: READY (red), SET (amber, the last `amber` s), then GO! for a moment. */
+  countdown(left: number, amber: number) {
+    const el = $('countdown'), light = left > amber ? 'red' : left > 0 ? 'amber' : 'green';
+    if (el.dataset.light === light && !el.hidden) return;
+    el.dataset.light = light;
+    el.textContent = { red: 'Ready', amber: 'Set', green: 'Go!' }[light];
+    el.hidden = false;
+    clearTimeout(this.goTimer);
+    if (light === 'green') this.goTimer = window.setTimeout(() => { el.hidden = true; }, 700);
   }
 
   setEliminated(place: number, reason: string) {

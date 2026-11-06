@@ -33,7 +33,7 @@ export type Car = {
   id: string;
   name: string;
   year: number;
-  model: string; // file in public/models/, without .glb
+  model: string; // its toy design in world/vehicles/fleet.ts
   specs: { engine: string; gearbox: string; drive: string; cylinders: number; turbo: boolean }; // shown in the garage, drives the engine sound
   real: { zeroTo100: number; topKmh: number; brake100: number }; // maker's figures; a test checks the physics land on them
   physics: CarPhysics;

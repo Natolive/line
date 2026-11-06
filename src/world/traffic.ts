@@ -1,29 +1,32 @@
 // Traffic AI: keeps a safe distance, brakes (with brake lights), signals, then changes lanes.
 // Positions are along the road (`d`, meters from the start), so the same traffic can be shared online:
 // one game simulates it ('local': solo, or the room host) and the others mirror it ('remote').
-import { CARRIAGEWAY_HALF, IMPACT, LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, SHOULDER, TRAFFIC as T } from '../core/config.ts';
+import { CARRIAGEWAY_HALF, EVENTS, IMPACT, LANE_COUNT, LANE_WIDTH, LANES, NEAR_MISS, SHOULDER, TRAFFIC as T } from '../core/config.ts';
 import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { TrafficCar } from '../net/protocol.ts';
 import { rectsOverlap, type Rect } from '../rules/collision.ts';
 import { densityAt, onShoulder } from '../rules/difficulty.ts';
+import { blocksIn } from '../rules/events.ts';
 import { massOf, type Moving } from '../rules/impact.ts';
 import { curvatureAt } from '../rules/track.ts';
 import type { TrackView } from './track.ts';
-import type { Fleet } from './vehicles/fleet.ts';
+import { setBeacons, type Fleet } from './vehicles/fleet.ts';
 import { setBlinker, setBrakeLights } from './vehicles/lights.ts';
 import { spawn, spinWheels, type Prefab, type Vehicle } from './vehicles/prefab.ts';
 import { Suspension } from './suspension.ts';
 
 const kmh = (k: number) => k / 3.6;
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
-/** Meters to the next broken-down car on shoulder `side` (0 left, 1 right); a queue if someone is riding it. */
-const nextGap = (side: number, ridden = false) => {
-  const [lo, hi] = SHOULDER.queueGap;
-  return ridden ? lo + Math.random() * (hi - lo) : SHOULDER.breakdownGap[side] * (0.5 + Math.random());
-};
+/** Meters to the next broken-down car on shoulder `side` (0 left, 1 right). */
+const nextGap = (side: number) => SHOULDER.breakdownGap[side] * (0.5 + Math.random());
+
+/** Traffic with a job: a police car on a chase, a wide load, the motorbikes escorting it. */
+type Role = 'police' | 'convoy' | 'moto' | null;
+const ROLES: Role[] = ['police', 'convoy', 'moto']; // their models follow the ordinary traffic's, in this order
 
 type Car = {
   id: number;
+  role: Role;
   model: number; // index into the fleet's traffic models, the same on every player's game
   v: Vehicle;
   lane: number;
@@ -56,26 +59,38 @@ export class Traffic {
   private track: TrackView;
   private models: Prefab[];
   private heavyFrom: number;
+  private specialFrom: number; // models from here on are ROLES
+  private blocks: { lane: number; from: number; to: number }[] = []; // lanes closed by road events, around the pack
+  private sirens: Car[] = []; // police cars on the road
+  private policeIn = 0; // s until the next police chase
+  private convoyIn = 0; // s until the next wide load
+  /** Things worth telling the player (a police car coming, a wide load ahead): the game shows and empties it. */
+  readonly news: string[] = [];
   private cars: Car[] = [];
   private clock = 0;
   private nextId = 1;
   private nextBreakdown = [0, 0]; // road position of the next broken-down car, left and right shoulder
-  private queued = [0, 0]; // cars already queued for whoever is riding that shoulder
+  private clearUntil = -Infinity; // road position before which no car spawns behind the pack (the start)
 
   constructor(track: TrackView, fleet: Fleet) {
     this.track = track;
     this.scene = track.root;
-    this.models = [...fleet.cars, ...fleet.heavy];
+    this.models = [...fleet.cars, ...fleet.heavy, fleet.police, fleet.convoy, fleet.moto];
     this.heavyFrom = fleet.cars.length;
+    this.specialFrom = fleet.cars.length + fleet.heavy.length;
   }
 
   /** Clears the road and pre-fills it ahead of `me`. */
   reset(me: Driver) {
     for (const c of this.cars) this.scene.remove(c.v.mesh);
     this.cars = [];
+    this.news.length = 0;
     if (this.remote) return;
+    this.policeIn = EVENTS.policeEverySec * (0.5 + Math.random());
+    this.convoyIn = EVENTS.convoyEverySec * (0.5 + Math.random());
+    this.blocks = blocksIn(me.d - 200, me.d + 800);
     this.nextBreakdown = [0, 1].map((side) => me.d + 150 + nextGap(side));
-    this.queued = [0, 0];
+    this.clearUntil = me.d + T.startClear;
     for (let d = me.d + 70; d < me.d - T.spawnAhead; d += 22 + Math.random() * 25) this.trySpawn(d, [me]);
   }
 
@@ -87,6 +102,12 @@ export class Traffic {
     this.clock += dt;
     const drivers = meRacing ? [me, ...others] : others;
     let nearMisses = 0;
+    setBeacons(this.clock);
+    if (!this.remote) {
+      const ds0 = drivers.length ? drivers.map((p) => p.d) : [me.d];
+      this.blocks = blocksIn(Math.min(...ds0) - T.despawnBehind, Math.max(...ds0) - T.despawnAhead);
+      this.sirens = this.cars.filter((c) => c.role === 'police');
+    }
 
     for (const c of this.cars) {
       const before = c.d - me.d;
@@ -120,21 +141,18 @@ export class Traffic {
     });
     const horizon = front - T.spawnAhead;
     for (const side of [0, 1]) {
-      const sign = side ? 1 : -1, ridden = drivers.some((p) => onShoulder(p.x) && Math.sign(p.x) === sign);
       if (this.nextBreakdown[side] < front) this.nextBreakdown[side] = horizon; // e.g. just took over as host
-      const queue = ridden && this.queued[side] < SHOULDER.queueMax;
-      if (!ridden) this.queued[side] = 0;
-      if (queue) this.nextBreakdown[side] = Math.min(this.nextBreakdown[side], horizon); // start the block now
       if (this.nextBreakdown[side] >= horizon) continue;
-      this.add(Math.floor(Math.random() * this.heavyFrom), this.nextBreakdown[side], sign * SHOULDER.x, 0, false);
-      if (queue) this.queued[side]++;
-      this.nextBreakdown[side] += nextGap(side, queue && this.queued[side] < SHOULDER.queueMax);
+      this.add(Math.floor(Math.random() * this.heavyFrom), this.nextBreakdown[side], (side ? 1 : -1) * SHOULDER.x, 0, false);
+      this.nextBreakdown[side] += nextGap(side);
     }
+    this.dispatch(dt, front, back);
     const wanted = Math.min(70, densityAt(km) * (1 + (front - back) / 500));
-    if (this.cars.filter((c) => !parked(c)).length < wanted) {
+    if (this.cars.filter((c) => !parked(c) && !c.role).length < wanted) {
       const speed = drivers.reduce((s, p) => s + p.speed, 0) / Math.max(1, drivers.length);
       // faster than traffic: new cars appear ahead; slower: they come up from behind
-      const ahead = Math.random() < Math.min(1, Math.max(0.15, (speed * 3.6 - 60) / 70));
+      // near the start nothing comes from behind: cars at full speed would run into a grid still pulling away
+      const ahead = back - T.spawnBehind < this.clearUntil || Math.random() < Math.min(1, Math.max(0.15, (speed * 3.6 - 60) / 70));
       this.trySpawn(ahead ? front - T.spawnAhead : back - T.spawnBehind, drivers);
     }
     return nearMisses;
@@ -223,12 +241,15 @@ export class Traffic {
       c.shaken -= dt;
       want = Math.min(want, c.desired * 0.5); // just been hit: slows right down
     }
-    if (lead && lead.gap < T.minGap + c.speed * T.headwaySec) want = Math.min(want, lead.speed * (lead.gap < T.minGap ? 0.8 : 1));
+    // far enough back to stop in time, even for something standing still (an accident, roadworks)
+    const room = lead && T.minGap + Math.max(c.speed * T.headwaySec, (c.speed ** 2 - lead.speed ** 2) / (2 * T.brake * 0.7));
+    if (lead && room && lead.gap < room) want = Math.min(want, lead.speed * (lead.gap < T.minGap ? 0.8 : 1));
     const before = c.speed;
     c.braking = c.speed > want + 0.3;
     c.speed = c.braking ? Math.max(want, c.speed - T.brake * dt) : Math.min(want, c.speed + T.accel * dt);
     setBrakeLights(c.v, c.braking);
     c.suspension.update(c.v.body, dt, (c.speed - before) / dt, 0, c.speed * dt);
+    if (c.role === 'convoy' || c.role === 'moto') return; // the wide load and its escorts hold their line
 
     // knocked sideways: the shove dies out, then the driver steers back to the middle of the nearest lane
     if (c.knock !== 0) {
@@ -244,10 +265,21 @@ export class Traffic {
       c.x += Math.sign(dx) * Math.min(Math.abs(dx), T.laneChangeSpeed * dt);
       return;
     }
+    // a police car coming up behind in my lane: move over, right first
+    if (c.target === c.lane && !c.role && this.sirens.some((p) => p.d < c.d && c.d - p.d < EVENTS.yieldDistance && Math.abs(p.x - c.x) < LANE_WIDTH * 0.8)) {
+      for (const to of [c.lane + 1, c.lane - 1]) {
+        if (to < 0 || to >= LANE_COUNT || !this.laneClear(to, c, drivers)) continue;
+        c.target = to;
+        c.blink = 0.3;
+        return;
+      }
+    }
     // lane changes: signal first, then drift over
     if (c.target === c.lane) {
-      const stuck = !!lead && lead.gap < 50 && lead.speed < c.desired - 2;
-      if (Math.random() < dt * (stuck ? T.blockedLaneChangePerSec : T.laneChangePerSec)) {
+      // stuck behind someone slower, or heading for something standing in the lane (roadworks, an accident)
+      const stuck = !!lead && ((lead.gap < 50 && lead.speed < c.desired - 2) || (lead.speed === 0 && lead.gap < 300));
+      const rate = c.role === 'police' ? (stuck ? 4 : 0) : stuck ? T.blockedLaneChangePerSec : T.laneChangePerSec;
+      if (Math.random() < dt * rate) {
         const dir = Math.random() < 0.5 ? -1 : 1;
         for (const to of [c.lane + dir, c.lane - dir]) {
           if (to < 0 || to >= LANE_COUNT || (c.heavy && to < 2)) continue;
@@ -278,6 +310,7 @@ export class Traffic {
     };
     for (const o of this.cars) if (o !== c) consider(o.x, o.d, o.v.w, o.v.l, o.speed);
     for (const p of drivers) consider(p.x, p.d, p.rect.w, p.rect.l, p.speed);
+    for (const b of this.blocks) consider(LANES[b.lane], (b.from + b.to) / 2, LANE_WIDTH * 0.8, b.to - b.from, 0);
     return best as { gap: number; speed: number } | null;
   }
 
@@ -285,6 +318,7 @@ export class Traffic {
     const room = 12 + c.v.l + c.speed * 0.8;
     const occupies = (x: number) => Math.abs(x - LANES[lane]) < LANE_WIDTH * 0.85;
     if (drivers.some((p) => occupies(p.x) && Math.abs(p.d - c.d) < room)) return false;
+    if (this.blocks.some((b) => b.lane === lane && c.d + room > b.from && c.d - room < b.to)) return false;
     return !this.cars.some((o) => o !== c && !parked(o) && (occupies(o.x) || o.target === lane) && Math.abs(o.d - c.d) < room);
   }
 
@@ -295,12 +329,46 @@ export class Traffic {
     const lanes = LANES.map((_, i) => i).sort(() => Math.random() - 0.5);
     for (const lane of lanes) {
       if (this.cars.some((c) => (c.lane === lane || c.target === lane) && Math.abs(c.d - d) < 30)) continue;
+      if (this.blocks.some((b) => b.lane === lane && d > b.from - 60 && d < b.to + 10)) continue; // not in a closed lane
       const heavy = !behind && lane >= 2 && Math.random() < T.heavyChance;
       let desired = heavy ? kmh(T.truckKmh + (Math.random() - 0.5) * 10) : kmh(T.laneSpeedsKmh[lane] + (Math.random() - 0.5) * 2 * T.speedJitterKmh);
       if (behind) desired = Math.max(desired, Math.min(...drivers.map((p) => p.speed)) + kmh(15)); // must be faster to ever reach anyone
-      const models = this.models.map((_, i) => i).filter((i) => (i >= this.heavyFrom) === heavy);
+      const models = this.models.map((_, i) => i).filter((i) => i < this.specialFrom && (i >= this.heavyFrom) === heavy);
       this.add(pick(models), d, LANES[lane], desired, heavy).desired = desired;
       return;
+    }
+  }
+
+  /**
+   * Now and then sends a police car up from behind the pack (fast lane, everyone moves over), or a wide load
+   * ahead of it: a boat across the two right lanes at walking pace for a motorway, a motorbike before and after.
+   */
+  private dispatch(dt: number, front: number, back: number) {
+    // it arrives where ordinary traffic does, out in the fog: whoever stands in its way there simply isn't spawned
+    const makeRoom = (d: number, lanes: number[], span: number) => {
+      if (this.blocks.some((b) => lanes.includes(b.lane) && d + span > b.from && d - span < b.to)) return false;
+      this.cars = this.cars.filter((c) => {
+        if (c.role || parked(c) || !lanes.includes(c.lane) || Math.abs(c.d - d) > span) return true;
+        this.scene.remove(c.v.mesh);
+        return false;
+      });
+      return true;
+    };
+    if ((this.policeIn -= dt) <= 0 && back - T.spawnBehind > this.clearUntil) {
+      const d = back - (T.spawnBehind + T.despawnBehind) / 2; // behind the pack, yet short of where traffic is dropped
+      if (makeRoom(d, [0], 30)) {
+        this.add(this.specialFrom, d, LANES[0], kmh(EVENTS.policeKmh), false);
+        this.policeIn = EVENTS.policeEverySec * (0.5 + Math.random());
+      }
+    }
+    if ((this.convoyIn -= dt) <= 0 && front - T.spawnAhead > this.clearUntil) {
+      const d = front - T.spawnAhead, speed = kmh(EVENTS.convoyKmh), g = EVENTS.escortGap;
+      if (makeRoom(d, [2, 3], g + 30)) {
+        this.add(this.specialFrom + 2, d + g, LANES[3], speed, true);
+        this.add(this.specialFrom + 1, d, (LANES[2] + LANES[3]) / 2, speed, true);
+        this.add(this.specialFrom + 2, d - g, LANES[3], speed, true);
+        this.convoyIn = EVENTS.convoyEverySec * (0.5 + Math.random());
+      }
     }
   }
 
@@ -310,7 +378,10 @@ export class Traffic {
     this.track.place(v.mesh, d, x); // in place right away, not only from the next frame
     this.scene.add(v.mesh);
     const lane = LANES.reduce((best, lx, i) => (Math.abs(lx - x) < Math.abs(LANES[best] - x) ? i : best), 0);
-    const car: Car = { id, model, v, lane, target: lane, x, d, yaw: 0, knock: 0, shaken: 0, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
+    const role = model >= this.specialFrom ? ROLES[model - this.specialFrom] : null;
+    if (role === 'police') this.news.push('Police chase!');
+    if (role === 'convoy') this.news.push('Wide load ahead');
+    const car: Car = { id, role, model, v, lane, target: lane, x, d, yaw: 0, knock: 0, shaken: 0, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
     this.cars.push(car);
     return car;
   }

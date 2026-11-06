@@ -46,8 +46,9 @@ export class Player {
     return this.driven.physics;
   }
 
-  /** Swaps in another garage car. */
+  /** Swaps in another garage car; it drives on where and as fast as the previous one was (the garage keeps rolling). */
   choose(choice: Car) {
+    const was = this.car ? { ...this.state } : null;
     if (this.car) this.scene.remove(this.car.mesh);
     this.model = choice;
     this.car = spawn(this.fleet.players[choice.model]);
@@ -62,7 +63,8 @@ export class Player {
     this.car.mesh.add(this.mirror);
     this.scene.add(this.car.mesh);
     setBrakeLights(this.car, false);
-    this.reset(0);
+    this.reset(was?.speed ?? 0, was?.x);
+    if (was) this.state.heading = was.heading;
   }
 
   get rect(): Rect {

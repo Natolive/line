@@ -4,7 +4,7 @@
 
 A realistic driving survival game in the browser: free driving on a 4-lane motorway, real-ish physics, traffic that behaves like traffic.
 
-Realism wins over arcade shortcuts, unless it makes the game unfair or unplayable.
+Physics stay realistic; the look is arcade: bold flat colours, cel shading, painted skies, many fantasy worlds.
 
 ## Stack
 
@@ -32,6 +32,8 @@ Every gameplay tuning number lives in `src/core/config.ts`, car figures in `src/
 
 ## World conventions
 
+Cel shading is one global patch of three's lighting chunk (`world/stage.ts`): no per-material toon setup.
+
 Units are meters, seconds, radians. Speeds in m/s internally; km/h only for display.
 
 The road is a real curve, a pure function of `d` and the map's seed (`rules/track.ts`: curvature, heading, position, tunnels and bridges); the land beside it is `rules/terrain.ts`.
@@ -50,11 +52,13 @@ Lanes are indexed 0 (left, fast) to 3 (right, slow).
 
 `THEMES` in `data/themes.ts` defines each area; `rules/themes.ts` decides which one applies at a distance and how far a blend has gone.
 
-Sky, sun, fog and reflections blend in `world/environment.ts`; sun direction and fog colour are read from each HDRI, never hand-set. They turn with the road's heading, and give way to the lamps inside tunnels (`tunnelShade`).
+Sky, sun, fog and reflections blend in `world/environment.ts`: a painted gradient sky per theme (no photos), fog the colour of its horizon, reflections rendered from that sky. They turn with the road's heading, and give way to the lamps inside tunnels (`tunnelShade`).
 
 Scenery fills 40 m sections far ahead in the fog (`world/scenery.ts`), standing on the land (`terrainHeight`); never spawn props in view.
 
-Each theme also sets its land (`relief`, rock, snow line), its bends (`curves`) and what the road meets (`structures`: tunnels, viaducts, a lake bridge, overpasses, noise walls). Lengths and sizes of those live in `ROADSIDE` and `TRACK` (`core/config.ts`).
+Each theme also sets its colours (ground, rock, water, `tint` for props), its land (`relief`, snow line), its bends (`curves`) and what the road meets (`structures`: tunnels, viaducts, a lake bridge, overpasses, noise walls). Lengths and sizes of those live in `ROADSIDE` and `TRACK` (`core/config.ts`).
+
+Road events: roadworks, lost loads and accidents stand at fixed spots, a pure function of the seed (`rules/events.ts`, drawn by `world/events.ts`); traffic queues behind or steers round the lanes they close (`blocksIn`), and the player hits what stands there through `impact()`. Police chases and wide-load convoys are traffic with a role (`world/traffic.ts`), so they are shared online like any traffic car.
 
 Night is one number (0..1) that drives lamps, lit windows, sign glow and headlights through `setNight()` on each system.
 
@@ -106,26 +110,16 @@ Contacts go through `rules/impact.ts`: momentum shared by mass, damage from each
 
 Before finishing a change: `npm run typecheck && npm test && npm run build`.
 
-## Assets
+## Models
 
-Vehicles are real glTF models in `public/models/`, fetched and compressed by `scripts/fetch-assets.mjs`.
+No model files: every car and prop is built from scratch in code as a low-poly toy. Cars in `world/vehicles/fleet.ts` (a `Design` per car: real length, width, height, plus colour and shape), props in `world/assets.ts` (one builder each, at real size).
 
-`world/vehicles/prefab.ts` normalizes each model at load time (faces -z, ground at y = 0, real size) and finds wheels by node name.
+Add detail freely: every prop and car is merged into one mesh per colour at build time (`merge()` in `world/arcade.ts`), so parts cost nothing per frame. Only what moves stays apart (turbine `blades`, `wheel`s, `taillight`s).
 
-Brake lights use the model's own tail lamps (`findTailLamps()` in `world/vehicles/lights.ts`): light units named lamp/light/optics/brake/tail have their rear part cut out at load; plain red parts count only if entirely at the rear (red paint is not a lamp). Stand-in lamps are added only when nothing is found.
+Materials are flat colours, one shared per colour (`paint()`, `mat()`); no textures except the towers' windows (`map` by day, `emissiveMap` lit at night).
 
-If a model is invisible up close or see-through, check its material first (some packs export foliage as glass): replace it, as `treeFix()` does.
-
-If a model renders washed-out white or chrome, check its triangle winding first (`flipWinding` in its spec), not its colours.
-
-Never bake transforms into model geometry: meshes are quantized by meshopt, so copy node matrices instead.
-
-Only use assets whose license allows it (CC0 or CC-BY) and keep `public/models/CREDITS.md` up to date.
-
-Some packs use specular-glossiness materials, which three.js ignores (white models): the fetch script converts every model to metal-rough.
-
-Check a Sketchfab model before downloading: `curl -s https://api.sketchfab.com/v3/models/<id>` → `license.label` and `isDownloadable`. Editorial or no license is a hard no.
+`world/vehicles/prefab.ts` fits each built car (faces -z, ground at y = 0, real size), finds wheels by the name `wheel`, and outlines it (`outline()` in `world/arcade.ts`). Tail lamps are parts named `taillight`, `lights.ts` turns them into brake lights.
 
 Garage cars use real specifications only (power, torque, redline, gear ratios, weight, drive, CdA, brakes); put the maker's figures in `real` and the garage test checks `measure()` lands on them. Only `driveShare` and `cdA` may be tuned to match, never power or weight.
 
-Never read or print `.env.local`: it holds the Sketchfab token.
+Never read or print `.env.local`: it holds a Sketchfab token (no longer used).

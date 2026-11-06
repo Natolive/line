@@ -5,13 +5,11 @@ export const LANE_COUNT = 4;
 export const LANES = Array.from({ length: LANE_COUNT }, (_, i) => (i - (LANE_COUNT - 1) / 2) * LANE_WIDTH);
 export const CARRIAGEWAY_HALF = (LANE_COUNT * LANE_WIDTH) / 2; // solid edge lines
 export const GUARDRAIL_X = CARRIAGEWAY_HALF + 2.5; // hard shoulder, then the rail
-// Hard shoulder: drivable, but no points, rumble-strip drag and broken-down cars, so it is never a shortcut past traffic.
+// Hard shoulder: drivable, but no points and rumble-strip drag, so it is never a shortcut past traffic; now and then a broken-down car.
 export const SHOULDER = {
   x: (CARRIAGEWAY_HALF + GUARDRAIL_X) / 2, // m, where broken-down cars stand (either side)
   drag: 3, // m/s² of extra deceleration with the car's centre past the edge line
-  breakdownGap: [1200, 400] as [left: number, right: number], // m on average between broken-down cars per side, randomised ±50%
-  queueGap: [20, 45] as [min: number, max: number], // m between them while someone drives on that shoulder: no gap to weave through
-  queueMax: 5, // cars in such a block, then the usual spacing until the shoulder is left and taken again
+  breakdownGap: [3000, 1500] as [left: number, right: number], // m on average between broken-down cars per side, randomised ±50%, never bunched
 };
 
 export const SUSPENSION = {
@@ -24,7 +22,15 @@ export const SUSPENSION = {
   bumpKick: 0.25, // m/s of vertical kick per bump at 108 km/h
 };
 
-export const START_SPEED = 25; // rolling start, m/s (90 km/h)
+// Standing start behind a line with traffic lights; meanwhile the garage car cruises down the road.
+export const START = {
+  line: 3.5, // m ahead of the front row (d = 0): the chequered line and the lights
+  rowGap: 14, // m between rows of the online grid (rules/grid.ts): four abreast, front row at d = 0
+  red: 1.5, // s of red before amber (solo; online the server's countdown is red until its last second)
+  amber: 1, // s of amber before green
+  menuKmh: 70, // the garage car's cruising speed
+  menuLane: 2, // the lane it cruises in
+};
 
 export const TRAFFIC = {
   laneSpeedsKmh: [130, 115, 100, 85], // left lane is the fast lane
@@ -33,6 +39,7 @@ export const TRAFFIC = {
   heavyChance: 0.3, // vans and trucks, right two lanes only
   spawnAhead: -300,
   spawnBehind: 60,
+  startClear: 600, // m past the start where no traffic comes up from behind: the grid gets away in peace
   despawnAhead: -360,
   despawnBehind: 90,
   densityStart: 10,
@@ -47,6 +54,39 @@ export const TRAFFIC = {
   accel: 2.2,
   brake: 7,
   curveAccel: 3, // m/s²: drivers slow down for bends that would push them sideways harder than this
+};
+
+// Events on the road (rules/events.ts): roadworks, a lost load and accidents stand at fixed spots of the map;
+// a wide-load convoy and police chases are traffic (world/traffic.ts), simulated by whoever runs the traffic.
+export const EVENTS = {
+  every: 1100, // m between candidate spots for a roadworks, lost load or accident
+  chance: 0.6, // share of those spots that get one
+  firstAt: 1200, // m: none before this, past the start line
+  worksLength: [250, 450] as [min: number, max: number], // m of closed lanes
+  taper: 60, // m over which the cones lead traffic out of the closed lanes
+  coneEvery: 8, // m between cones along a closure
+  signsAhead: [400, 200], // m before roadworks and accidents: warning signs on the shoulder
+  loadLength: 40, // m of road strewn with boxes and tyres
+  trianglesAhead: 60, // m: a warning triangle before an accident
+  // footprint (m) and mass (kg) of what stands on the road; light things are knocked flying, solid ones don't budge
+  things: {
+    cone: { w: 0.45, l: 0.45, mass: 5 },
+    sign: { w: 1.2, l: 0.3, mass: 15 },
+    triangle: { w: 0.6, l: 0.2, mass: 2 },
+    tyre: { w: 0.8, l: 0.8, mass: 12 },
+    box: { w: 1.1, l: 1.1, mass: 45 },
+    arrow: { w: 2.2, l: 3.2, mass: 1e9 }, // the flashing arrow trailer that opens roadworks
+    wreck: { w: 1.9, l: 4.5, mass: 1e9 },
+    truck: { w: 2.5, l: 9, mass: 1e9 }, // the lorry that lost its load, on the shoulder
+  },
+  // moving events: how often (s on average) the traffic sends one, and how they drive
+  policeEverySec: 70,
+  convoyEverySec: 100,
+  policeKmh: 185,
+  convoyKmh: 60,
+  escortGap: 28, // m between the wide load and each of its motorbike escorts
+  yieldDistance: 150, // m: traffic ahead of a police car in its lane moves over
+  announceAhead: 450, // m: the HUD warns of an event this far ahead
 };
 
 export const NEAR_MISS = { gap: 1.0, minSpeed: 25, points: 250 };

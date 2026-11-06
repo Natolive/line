@@ -7,7 +7,6 @@ import { THEMES } from '../data/themes.ts';
 import { floorHeight, terrainHeight, waterLevel } from '../rules/terrain.ts';
 import { themeIndexAt, toNextBorder } from '../rules/themes.ts';
 import { curvatureAt, gantriesIn, hash, overpassesIn, rowsIn, structureAt, structuresIn, type Structure } from '../rules/track.ts';
-import type { World } from './assets.ts';
 import { Mesher, type Profile } from './mesher.ts';
 import { landMaterial, texV, themePair } from './terrain.ts';
 import { PieceFrame, Ring, type TrackView } from './track.ts';
@@ -122,11 +121,10 @@ type Piece = { group: THREE.Group; geos: THREE.BufferGeometry[]; gantries: Gantr
 
 export class Road {
   private ring: Ring<Piece>;
-  private world: World;
   readonly asphalt: THREE.MeshStandardMaterial;
   private paint = new THREE.MeshStandardMaterial({ color: 0xf4f4f0, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  private metal = new THREE.MeshStandardMaterial({ color: 0xb8bcc2, metalness: 0.85, roughness: 0.35 });
-  private steel = new THREE.MeshStandardMaterial({ color: 0x8d9299, metalness: 0.7, roughness: 0.45 });
+  private metal = new THREE.MeshStandardMaterial({ color: 0xffc21a, metalness: 0.2, roughness: 0.5 }); // yellow rails
+  private steel = new THREE.MeshStandardMaterial({ color: 0xff3d6e, metalness: 0.2, roughness: 0.5 }); // pink gantries and posts
   private concrete: THREE.MeshStandardMaterial;
   private headwall: THREE.MeshStandardMaterial;
   private lamp = new THREE.MeshStandardMaterial({ color: 0xffe2b0, emissive: 0xffc070, emissiveIntensity: 3 });
@@ -137,11 +135,10 @@ export class Road {
   private live = new Set<Gantry>();
   private night = 0;
 
-  constructor(track: TrackView, world: World) {
-    this.world = world;
-    const s = world.surfaces;
-    this.asphalt = new THREE.MeshStandardMaterial({ map: s.asphalt_02.map, normalMap: s.asphalt_02.normalMap, roughnessMap: s.asphalt_02.roughnessMap, color: 0x9a9a9a });
-    this.concrete = new THREE.MeshStandardMaterial({ map: s.concrete_wall_008.map, normalMap: s.concrete_wall_008.normalMap, roughnessMap: s.concrete_wall_008.roughnessMap, color: 0xc9c6bf });
+  constructor(track: TrackView) {
+    // arcade colours: plain paint, no photo textures
+    this.asphalt = new THREE.MeshStandardMaterial({ color: 0x3b3f52, roughness: 0.85 });
+    this.concrete = new THREE.MeshStandardMaterial({ color: 0xe8e2f2, roughness: 0.8 });
     this.headwall = this.concrete.clone();
     this.headwall.side = THREE.DoubleSide; // seen from the approach and, through the mouth, from inside
     this.ring = new Ring<Piece>(LEN, BEHIND, AHEAD, (d0) => {
@@ -217,7 +214,7 @@ export class Road {
     for (let d = Math.ceil(d0 / 4) * 4; d < d1; d += 4) for (const s of [-1, 1]) this.solid(mesher(this.metal), post, d, s * (GUARDRAIL_X + 0.1), 0);
 
     // verges in the open: from the road edge to where the land starts, as a cutting or an embankment
-    const { a, b, blend } = themePair(d0), land = landMaterial(this.world, a, b);
+    const { a, b, blend } = themePair(d0), land = landMaterial(a, b);
     for (const rows of runs((m) => m === 'open')) {
       const m = mesher(land);
       for (const s of [-1, 1]) {

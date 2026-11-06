@@ -1,6 +1,7 @@
 // Battle royale: the online side of a race. Owns the connection, the room, the grid, the wall clock,
 // the rivals and eliminations; the Game asks it questions and reacts to its events.
 import type { TrackView } from '../world/track.ts';
+import { gridSlot } from '../rules/grid.ts';
 import { Net } from '../net/client.ts';
 import { BIN, decodeSnapshot, decodeTraffic, encodeState, encodeTraffic } from '../net/codec.ts';
 import { due } from '../net/interp.ts';
@@ -9,13 +10,11 @@ import { wallAt } from '../rules/wall.ts';
 import { Rivals } from '../world/rivals.ts';
 import type { Traffic } from '../world/traffic.ts';
 import type { Fleet } from '../world/vehicles/fleet.ts';
-import { LANES } from './config.ts';
 
 const STATE_EVERY = 1 / NET_HZ, TRAFFIC_EVERY = 1 / 30; // seconds between network updates (traffic is steady: 30 is plenty)
 const CLOCK_SLEW = 0.05; // the clock estimate catches up at most 5% faster or slower than real time: no visible jump
 const PING_EVERY = 1; // s; also keeps the clock in sync
 const PING_BURST = { count: 10, every: 0.1 }; // the first pings come fast, so the clock is settled before the lights go green
-const ROW_GAP = 14; // meters between grid rows
 
 export type BattleEvents = {
   lobby(): void;
@@ -25,9 +24,6 @@ export type BattleEvents = {
   error(message: string): void;
   closed(): void;
 };
-
-/** Grid slot `i`: four abreast, rows behind the start line. */
-export const gridSlot = (i: number) => ({ d: -Math.floor(i / LANES.length) * ROW_GAP, x: LANES[i % LANES.length] });
 
 export class Battle {
   me = '';

@@ -1,6 +1,7 @@
-// Turns a car from any model pack into a normalized vehicle: faces -z, sits on y = 0, centered, real size,
-// wheels that spin and steer, lights fitted. Model files are never modified; fixes are applied at load.
+// Turns a built car (fleet.ts) into a normalized vehicle: faces -z, sits on y = 0, centered, real size,
+// wheels that spin and steer, lights fitted.
 import * as THREE from 'three';
+import { outline } from '../arcade.ts';
 import { fitLights, type Role } from './lights.ts';
 
 export type Vehicle = {
@@ -21,14 +22,9 @@ export type Spec = {
   parts: THREE.Object3D[]; // the model's top-level pieces (body panels and wheels)
   isWheel: (o: THREE.Object3D) => boolean;
   forward: 'center' | [x: number, z: number]; // which way the source model faces
-  length?: number; // scale so the body is this long (m)...
-  wheelDiameter?: number; // ...or so the wheels are this big
-  maxWidth?: number; // squash stylised models to fit a real lane
+  length: number; // scale so the body is this long (m)
   lightHeight?: number; // brake light height as a fraction of body height
-  flipWinding?: boolean; // model exported inside-out: surfaces light as if seen from behind (washed-out, chrome-like)
 };
-
-const GLASS = new THREE.MeshPhysicalMaterial({ color: 0x0c1118, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.45 });
 
 
 const box = (objs: THREE.Object3D[]) => objs.reduce((b, o) => b.union(new THREE.Box3().setFromObject(o, true)), new THREE.Box3());
@@ -57,18 +53,12 @@ export function prefab(s: Spec): Prefab {
   probe.updateMatrixWorld(true);
   const size = new THREE.Box3().setFromObject(probe, true).getSize(new THREE.Vector3());
   const wheelH = wheelParts.length ? new THREE.Box3().setFromObject(wheelParts[0], true).getSize(new THREE.Vector3()).y : 0.66;
-  const k = s.length ? s.length / size.z : s.wheelDiameter! / wheelH;
-  const kx = s.maxWidth ? Math.min(k, s.maxWidth / size.x) : k;
-  const m = new THREE.Matrix4().makeScale(kx, k, k).multiply(rt);
+  const k = s.length / size.z;
+  const m = new THREE.Matrix4().makeScale(k, k, k).multiply(rt);
 
   const root = new THREE.Group(), body = new THREE.Group();
   root.add(body);
   bodyParts.forEach((p) => body.add(place(p, m)));
-  // Refractive "transmission" glass costs an extra render pass and renders as a milky film here: use plain tinted glass.
-  body.traverse((o) => {
-    const mesh = o as THREE.Mesh, mat = mesh.material as THREE.MeshPhysicalMaterial | undefined;
-    if (mesh.isMesh && mat && !Array.isArray(mat) && mat.transmission > 0) mesh.material = GLASS;
-  });
 
   let trackHalf = 0;
   const rearWheels: THREE.Vector3[] = [];
@@ -87,25 +77,13 @@ export function prefab(s: Spec): Prefab {
     root.add(pivot);
   }
 
-  const w = Math.min(size.x * kx, trackHalf * 2 + 0.25), l = size.z * k, h = size.y * k;
+  const w = Math.min(size.x * k, trackHalf * 2 + 0.25), l = size.z * k, h = size.y * k;
   const y = h * (s.lightHeight ?? 0.55), lx = Math.min(w / 2, trackHalf) - 0.42; // inboard: rears taper at light height
   fitLights(body, l, h, y, lx);
-  if (s.flipWinding) root.traverse(flipWinding); // after wheels and lamps are in place
   root.traverse((o) => { o.castShadow = o.receiveShadow = (o as THREE.Mesh).isMesh === true; });
+  outline(root); // after the shadows: outlines cast none
   const exhaust = new THREE.Vector3(-Math.max(0.3, lx - 0.15), Math.min(0.35, y * 0.6), l / 2 + 0.05);
   return { root, w, l, wheelR: (wheelH * k) / 2, exhaust, rearWheels };
-}
-
-/** Reverses each triangle's vertex order, so the face that was treated as the back becomes the front. */
-function flipWinding(o: THREE.Object3D) {
-  const mesh = o as THREE.Mesh;
-  if (!mesh.isMesh || !mesh.geometry.index || mesh.userData.role) return; // our own lamps are already right
-  const g = (mesh.geometry = mesh.geometry.clone()), idx = g.index!;
-  for (let i = 0; i < idx.count; i += 3) {
-    const t = idx.getX(i + 1);
-    idx.setX(i + 1, idx.getX(i + 2));
-    idx.setX(i + 2, t);
-  }
 }
 
 /** A new independent copy of a prefab; geometry and materials stay shared (except tail lamps, which each car switches on its own). */

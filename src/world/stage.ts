@@ -3,6 +3,11 @@ import * as THREE from 'three';
 
 const FOV = 58, FOV_BOOST = 14; // camera widens with speed
 
+// Cel shading for every lit material: sunlight falls in two flat bands (lit, shade) instead of a smooth falloff.
+const chunk = THREE.ShaderChunk.lights_physical_pars_fragment, smoothLight = 'vec3 irradiance = dotNL * directLight.color;';
+if (!chunk.includes(smoothLight)) throw new Error('three.js lighting changed: update the cel shading in stage.ts');
+THREE.ShaderChunk.lights_physical_pars_fragment = chunk.replace(smoothLight, 'vec3 irradiance = mix(0.3, 1.0, smoothstep(0.18, 0.24, dotNL)) * step(0.0001, dotNL) * directLight.color;');
+
 export class Stage {
   readonly renderer = new THREE.WebGLRenderer({ antialias: true });
   readonly scene = new THREE.Scene();
@@ -24,7 +29,7 @@ export class Stage {
     r.setPixelRatio(Math.min(devicePixelRatio, 2));
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFSoftShadowMap;
-    r.toneMapping = THREE.ACESFilmicToneMapping;
+    r.toneMapping = THREE.NeutralToneMapping; // keeps colours saturated, unlike ACES
     root.appendChild(r.domElement);
     const map = this.mirrorRT.texture;
     map.repeat.x = -1; // left-right flip

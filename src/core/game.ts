@@ -7,14 +7,17 @@ import type { CarState } from '../net/protocol.ts';
 import { Sfx } from '../platform/audio.ts';
 import { Input } from '../platform/input.ts';
 import { impact, massOf, type Hit } from '../rules/impact.ts';
+import { rectsOverlap } from '../rules/collision.ts';
 import { crashSeverity, shunt, type Wreck, type WreckEvents } from '../rules/crash.ts';
 import { multiplierFor } from '../rules/difficulty.ts';
+import { blocksIn, eventsIn, type EventKind } from '../rules/events.ts';
 import { themeBlend, themeIndexAt } from '../rules/themes.ts';
 import { curvatureAt, setSeed, tunnelShade } from '../rules/track.ts';
 import { measure } from '../rules/vehicle.ts';
 import { Hud, type Screen } from '../ui/hud.ts';
 import type { World } from '../world/assets.ts';
 import { Effects } from '../world/effects.ts';
+import { Events } from '../world/events.ts';
 import { Environment } from '../world/environment.ts';
 import { Player } from '../world/player.ts';
 import type { Rival } from '../world/rivals.ts';
@@ -22,6 +25,7 @@ import { Road } from '../world/road.ts';
 import { Scenery } from '../world/scenery.ts';
 import { Smoke } from '../world/smoke.ts';
 import { Stage } from '../world/stage.ts';
+import { StartLine } from '../world/startline.ts';
 import { Terrain } from '../world/terrain.ts';
 import { TrackView } from '../world/track.ts';
 import { Traffic, type Driver } from '../world/traffic.ts';
@@ -29,7 +33,7 @@ import type { Fleet } from '../world/vehicles/fleet.ts';
 import { setNight } from '../world/vehicles/lights.ts';
 import { Battle } from './battle.ts';
 import type { Car } from '../data/cars/index.ts';
-import { CRASH, IMPACT, NEAR_MISS, START_SPEED } from './config.ts';
+import { CRASH, EVENTS, IMPACT, LANES, NEAR_MISS, START } from './config.ts';
 
 type State = Screen | 'crash';
 const BEST_KEY = 'line-best', CAR_KEY = 'line-car', NAME_KEY = 'line-name';
@@ -43,6 +47,10 @@ export class Game {
   private terrain: Terrain;
   private env: Environment;
   private scenery: Scenery;
+  private startLine: StartLine;
+  private events: Events;
+  private announced = new Set<number>(); // road events already announced this race
+  private lightsLeft = 0; // s before green, on the solo grid
   private zone = 0;
   private player: Player;
   private traffic: Traffic;
@@ -72,14 +80,18 @@ export class Game {
     this.fleet = fleet;
     this.stage = new Stage(root);
     const s = this.stage.scene;
-    this.env = new Environment(s, this.stage.renderer, world);
+    this.env = new Environment(s, this.stage.renderer);
     setSeed(newSeed());
     this.track = new TrackView(s);
-    this.road = new Road(this.track, world);
-    this.terrain = new Terrain(this.track, world, this.road.asphalt);
+    this.road = new Road(this.track);
+    this.terrain = new Terrain(this.track, this.road.asphalt);
     this.scenery = new Scenery(this.track, world);
+    this.startLine = new StartLine(this.track);
+    this.events = new Events(this.track, fleet);
+    this.startLine.set(START.line);
     this.view(0);
     this.player = new Player(s, fleet, GARAGE[this.carIndex]);
+    this.cruiseFrom();
     this.traffic = new Traffic(this.track, fleet);
     this.fx = new Effects(s);
     this.smoke = new Smoke(s);
@@ -149,7 +161,7 @@ export class Game {
 
   private setState(s: State) {
     this.state = s;
-    if (s === 'menu' && this.player.wreck) this.player.reset(0); // the garage shows the car whole again
+    if (s === 'menu' && this.player.wreck) this.cruiseFrom(); // the garage shows the car whole again, already rolling
     if (s !== 'crash') this.hud.show(s);
     if (s === 'pause') this.sfx.suspend();
     else this.sfx.resume();
@@ -161,6 +173,7 @@ export class Game {
     this.road.update(this.dist);
     this.terrain.update(this.dist, dt);
     this.scenery.update(this.dist, dt);
+    this.events.update(this.dist, dt);
   }
 
   /** Sky, light and night lights for where the car is on the road (dimmed in tunnels); announces each new zone. */
@@ -199,13 +212,17 @@ export class Game {
     this.road.clear();
     this.terrain.clear();
     this.scenery.clear();
+    this.events.clear();
+    this.announced.clear();
     this.score = this.time = this.nearMisses = 0;
     this.dist = d;
     this.watching = null;
     this.player.spec = spec;
     this.zone = themeIndexAt(d, THEMES.length);
+    this.startLine.set(START.line);
+    this.startLine.lights(START.red + START.amber, START.amber);
     this.view();
-    this.player.reset(START_SPEED, x);
+    this.player.reset(0, x);
     this.traffic.reset(this.me);
     this.sfx.start();
   }
@@ -213,7 +230,8 @@ export class Game {
   private action() {
     if (this.state === 'menu' || this.state === 'over') {
       this.startRace();
-      this.setState('play');
+      this.lightsLeft = START.red + START.amber;
+      this.setState('countdown');
     } else if (this.state === 'pause') this.setState('play');
     else if (this.state === 'lobby' && this.battle?.isHost) this.battle.start();
     else if (this.state === 'results') this.setState('lobby');
@@ -276,7 +294,7 @@ export class Game {
     this.battle?.leave();
     this.battle = null;
     this.player.spec = null;
-    this.player.reset(0); // back from wherever spectating left the wreck
+    this.cruiseFrom(); // back from wherever spectating left the wreck, rolling again
     this.traffic.reset(this.me);
     if (toMenu) this.setState('menu');
   }
@@ -340,6 +358,22 @@ export class Game {
       this.traffic.knock(car, hit.dvb, [-hit.normal[0] * hit.depth * (1 - share), -hit.normal[1] * hit.depth], hit.jolt);
       if (this.onKnock(hit, car.x)) return;
     }
+    // what road events left standing: cones, boxes and signs go flying, wrecks and trailers don't budge
+    for (const e of eventsIn(this.dist - 15, this.dist + 15)) {
+      for (const t of e.things) {
+        if (Math.abs(t.d - this.dist) > 12 || this.events.isKnocked(t.id)) continue;
+        const rect = { x: t.x, z: this.dist - t.d, w: t.w, l: t.l, heading: t.yaw };
+        if (!rectsOverlap(me.rect, rect)) continue;
+        const hit = impact(this.player.moving, { rect, vx: 0, vz: 0, mass: t.mass });
+        if (!hit) continue;
+        if (t.mass < 1e6) {
+          this.events.knock(t.id);
+          const at = this.player.car.mesh.position.clone().setX(t.x).setY(0.5);
+          this.fx.burst(at, t.kind === 'box' ? [0xffa42a, 0x24252c] : t.kind === 'tyre' ? [0x1c1c22, 0x5a5a60] : [0xff6a1a, 0xf6f6f2], 8, 5);
+        } else this.player.state.x += hit.normal[0] * hit.depth;
+        if (this.onKnock(hit, t.x)) return;
+      }
+    }
     for (const r of this.battle?.rivals.drivers() ?? []) {
       if (Math.abs(r.d - this.dist) > 20) continue;
       const hit = impact(this.player.moving, { rect: { ...r.rect, z: this.dist - r.d }, vx: r.speed * Math.sin(r.rect.heading), vz: -r.speed * Math.cos(r.rect.heading), mass: massOf(r.rect.w, r.rect.l) });
@@ -375,15 +409,18 @@ export class Game {
       case 'play':
         return this.tick(dt);
       case 'countdown': {
-        const t = b!.raceTime();
-        this.hud.countdown(Math.ceil(-t));
-        b!.sync(dt, this.dist);
-        b!.publish(dt, this.carState());
+        // on the grid: the lights count down; the engine can be revved
+        const left = b ? -b.raceTime() : (this.lightsLeft -= dt);
+        this.startLine.lights(left, START.amber);
+        this.hud.countdown(left, START.amber);
+        if (b) {
+          b.sync(dt, this.dist);
+          b.publish(dt, this.carState());
+        } else this.traffic.update(dt, this.me, [], 0);
+        const car = this.player.physics, throttle = this.input.read().throttle;
+        this.sfx.setEngine(car.idleRpm + throttle * 0.8 * (car.redline - car.idleRpm), throttle, car.redline, this.player.driven.specs);
         this.stage.follow(p.x, p.heading, 0, dt);
-        if (t >= 0) {
-          this.hud.countdown(0);
-          this.setState('play');
-        }
+        if (left <= 0) this.setState('play');
         return;
       }
       case 'crash':
@@ -434,13 +471,32 @@ export class Game {
       }
       default:
         this.idleT += dt;
-        if (this.player.wreck) this.player.update(dt, IDLE); // still sliding when the game-over screen comes up
+        if (this.state === 'menu') this.cruise(dt);
+        else if (this.player.wreck) this.player.update(dt, IDLE); // still sliding when the game-over screen comes up
         this.fx.update(dt, 0);
         this.smoke.update(dt, 0);
         if (this.player.wreck) this.placeWreck();
         const at = this.player.car.mesh.position;
         this.stage.orbit(this.idleT, at.x, at.z);
     }
+  }
+
+  /** Puts the garage car in its lane at cruising speed: it is already rolling when the garage shows. */
+  private cruiseFrom() {
+    this.player.reset(START.menuKmh / 3.6, LANES[START.menuLane]);
+  }
+
+  /** The garage car drives itself down its lane (moving over for road events), through bends, while you choose. */
+  private cruise(dt: number) {
+    // its lane, or the nearest one left open by roadworks and accidents ahead
+    const closed = new Set(blocksIn(this.dist - 10, this.dist + 250).map((b) => b.lane));
+    const lane = LANES.map((_, i) => i).filter((i) => !closed.has(i)).sort((a, b) => Math.abs(a - START.menuLane) - Math.abs(b - START.menuLane))[0];
+    const p = this.player.state, laneX = LANES[lane];
+    const steer = Math.max(-1, Math.min(1, -(p.x - laneX) * 0.4 - p.heading * 6));
+    const throttle = p.speed * 3.6 < START.menuKmh ? 0.5 : 0;
+    this.dist += this.player.update(dt, { steer, throttle, brake: 0 }, curvatureAt(this.dist)).forward;
+    this.view(dt);
+    this.traffic.update(dt, this.me, [], this.dist / 1000);
   }
 
   private tick(dt: number) {
@@ -487,6 +543,7 @@ export class Game {
     // a damaged engine smokes, darker and thicker as it gets worse
     const engine = this.player.engineSmoke(), dmg = this.player.damage;
     if (engine && Math.random() < dt * (8 + dmg / 4)) this.puff(engine, dmg > IMPACT.limpAt ? 0x262626 : 0x8a8a8a, 0.4, 2.5, 1.6, 0.2 + dmg / 300);
+    this.announce();
     this.hud.setStats({ score: this.score, kmh, gear, rev: rpm / car.physics.redline, km: this.dist / 1000, mult, damage: dmg });
     this.stage.follow(p.x, p.heading, (p.speed * 3.6) / car.physics.limiterKmh, dt);
 
@@ -497,6 +554,16 @@ export class Game {
       if (this.dist < b.wall()) return this.crash('wall');
     }
     if (this.state === 'play') this.knocks();
+  }
+
+  /** Warns of what's coming: road events ahead, and whatever the traffic sends (a police chase, a wide load). */
+  private announce() {
+    for (const e of eventsIn(this.dist, this.dist + EVENTS.announceAhead)) {
+      if (e.from < this.dist || e.from - this.dist > EVENTS.announceAhead || this.announced.has(e.id)) continue;
+      this.announced.add(e.id);
+      this.hud.popup(NEWS[e.kind]);
+    }
+    for (const news of this.traffic.news.splice(0)) this.hud.popup(news);
   }
 
   private battleStats() {
@@ -581,6 +648,8 @@ export class Game {
     this.setState('over');
   }
 }
+
+const NEWS: Record<EventKind, string> = { works: 'Roadworks ahead', load: 'Lost load ahead', accident: 'Accident ahead' };
 
 /** A new map: any 32-bit number. */
 const newSeed = () => Math.floor(Math.random() * 2 ** 32);

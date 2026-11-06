@@ -31,6 +31,7 @@ export class Scenery {
   private windows = new Set<THREE.MeshStandardMaterial>();
   private lamp: THREE.Group;
   private spin = 0;
+  private tinted = new Map<string, THREE.Material>();
 
   constructor(track: TrackView, world: World) {
     this.world = world;
@@ -39,7 +40,7 @@ export class Scenery {
       b.traverse((o) => {
         const mat = (o as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
         if (!mat?.map) return;
-        mat.emissiveMap = mat.map;
+        mat.emissiveMap ??= mat.map; // towers bring their own: only the windows glow
         mat.emissive.set(0xffd9a0);
         mat.emissiveIntensity = 0;
         this.windows.add(mat);
@@ -82,6 +83,7 @@ export class Scenery {
     const { a, b, blend } = themePair(d0), water = waterAt(d0 + SECTION / 2);
     const overpasses = overpassesIn(d0 - 20, d0 + SECTION + 20);
     const themeAt = (d: number): Theme => (random() < blend(d) ? b : a);
+    let tint: number | undefined; // the world's colour for props on the side being filled
 
     /** Stands a copy of `proto` on the land at (d, x); `size` is its footprint radius, to sit it down on slopes. */
     const put = (proto: THREE.Object3D, d: number, x: number, o: { scale?: number; yaw?: number; size?: number } = {}) => {
@@ -92,6 +94,7 @@ export class Scenery {
       if (r) for (const [dd, dx] of [[-r, -r], [-r, r], [r, -r], [r, r]]) y = Math.min(y, terrainHeight(d + dd, x + dx));
       if (water !== null && y < water + 0.4) return null;
       const obj = proto.clone();
+      if (tint !== undefined) this.recolour(obj, tint);
       if (o.scale) obj.scale.multiplyScalar(o.scale);
       group.add(pf.place(obj, d, x, y - (r ? 0.3 : 0.05), o.yaw ?? rand(0, Math.PI * 2)));
       return obj;
@@ -105,7 +108,8 @@ export class Scenery {
     };
 
     for (const side of [-1, 1]) {
-      const kind: Kind = themeAt(d0 + SECTION / 2).scenery;
+      const theme = themeAt(d0 + SECTION / 2), kind: Kind = theme.scenery;
+      tint = theme.tint;
       const n = (avg: number) => Math.floor(avg) + (random() < avg % 1 ? 1 : 0);
       const trees = (count: number, protos: THREE.Object3D[], near = 7, far = 110, snowLine = 9999) => {
         for (let i = n(count); i > 0; i--) {
@@ -174,14 +178,43 @@ export class Scenery {
     return { group, blades };
   }
 
+  /**
+   * Repaints a prop in one colour, keeping its texture's light and shade (and cut-outs): candy trees, frozen
+   * pines, neon towers. Recoloured materials are shared, one per material and colour.
+   */
+  private recolour(obj: THREE.Object3D, color: number) {
+    const swap = (m: THREE.Material) => {
+      const key = `${m.uuid}:${color}`;
+      let t = this.tinted.get(key);
+      if (!t) {
+        t = m.clone();
+        const tint = new THREE.Color(color);
+        t.onBeforeCompile = (shader) => {
+          shader.uniforms.tint = { value: tint };
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', '#include <common>\nuniform vec3 tint;')
+            .replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb = min(vec3(1.0), dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)) * 2.2 * tint);');
+        };
+        t.customProgramCacheKey = () => 'tint';
+        if (this.windows.has(m as THREE.MeshStandardMaterial)) this.windows.add(t as THREE.MeshStandardMaterial);
+        this.tinted.set(key, t);
+      }
+      return t;
+    };
+    obj.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) mesh.material = Array.isArray(mesh.material) ? mesh.material.map(swap) : swap(mesh.material);
+    });
+  }
+
   /** Pylons of a power line running beside the road, and the sagging cables to the next one. */
   private powerLine(pf: PieceFrame, group: THREE.Group, d0: number, x: number) {
     const j = Math.ceil(d0 / PYLON_EVERY), d = j * PYLON_EVERY;
     if (d >= d0 + SECTION) return;
     const h = this.world.pylons[0].userData.height as number, y0 = terrainHeight(d, x), y1 = terrainHeight(d + PYLON_EVERY, x);
     if (structureAt(d) || waterAt(d) !== null) return;
-    group.add(pf.place(this.world.pylons[0].clone(), d, x, y0 - 0.2, Math.PI / 2));
-    // ponytail: cable ends guessed from the model's shape (arms at ~70 % and ~85 % of its height); measure the mesh if they look off
+    group.add(pf.place(this.world.pylons[0].clone(), d, x, y0 - 0.2, 0));
+    // cable ends on the pylon's arms (assets.ts): ±6 m at 70 % of its height, ±4.5 m at 85 %
     const pts: number[] = [];
     for (const [dx, k] of [[-6, 0.7], [6, 0.7], [-4.5, 0.85], [4.5, 0.85]]) {
       for (let i = 0; i < 12; i++) {

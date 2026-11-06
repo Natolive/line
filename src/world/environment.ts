@@ -1,10 +1,8 @@
-// Sky, sun, ambient light, fog and reflections, blended between two themes.
+// Sky, sun, ambient light, fog and reflections, blended between two themes. Arcade skies: a painted gradient,
+// a big sun disc and stars, no photos. Reflections on the cars are rendered from that same sky.
 import * as THREE from 'three';
-import type { Theme } from '../data/themes.ts';
-import type { World } from './assets.ts';
+import { THEMES, type Theme } from '../data/themes.ts';
 
-// Sky dome that crossfades two HDRI photos. Uses three.js's own equirect mapping so the sky
-// lines up with the reflections (scene.environment) and the sun direction read from the photo.
 const domeShader = {
   vertexShader: /* glsl */ `
     varying vec3 vDir;
@@ -13,17 +11,19 @@ const domeShader = {
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }`,
   fragmentShader: /* glsl */ `
-    uniform sampler2D skyA, skyB;
-    uniform float blend, gainA, gainB;
-    uniform vec3 fogColor;
+    uniform vec3 top, horizon, sunColor, sunDir, fogColor;
+    uniform float stars;
     varying vec3 vDir;
-    vec2 equirect(vec3 d) { return vec2(atan(d.z, d.x) * 0.15915494 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5); }
     void main() {
       vec3 d = normalize(vDir);
-      vec2 uv = equirect(d);
-      vec3 sky = mix(texture2D(skyA, uv).rgb * gainA, texture2D(skyB, uv).rgb * gainB, blend);
+      vec3 sky = mix(horizon, top, pow(max(d.y, 0.0), 0.55));
+      float s = dot(d, sunDir);
+      sky += sunColor * (smoothstep(0.9965, 0.998, s) * 3.0 + pow(max(s, 0.0), 24.0) * 0.5);
+      vec3 cell = floor(d * 260.0);
+      float r = fract(sin(dot(cell, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+      sky += stars * step(0.996, r) * smoothstep(0.04, 0.3, d.y);
       // the low sky dissolves into the fog colour, so far-away scenery fades into the horizon instead of popping in
-      sky = mix(sky, fogColor, smoothstep(0.14, 0.0, d.y));
+      sky = mix(sky, fogColor, smoothstep(0.12, 0.0, d.y));
       gl_FragColor = vec4(sky, 1.0);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
@@ -34,37 +34,59 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const UP = new THREE.Vector3(0, 1, 0);
 const TUNNEL_GLOW = 0xffc98a; // sodium-ish tunnel lamps
 
+/** Where theme `t`'s sun is before the road turns it (azimuth 0: straight down the road, -z). */
+const sunDir = (t: Theme) => {
+  const { elevation: e, azimuth: a } = t.sun;
+  return new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), -Math.cos(e) * Math.cos(a));
+};
+
+const domeMaterial = () =>
+  new THREE.ShaderMaterial({
+    ...domeShader,
+    uniforms: {
+      top: { value: new THREE.Color() }, horizon: { value: new THREE.Color() }, sunColor: { value: new THREE.Color() },
+      sunDir: { value: new THREE.Vector3() }, fogColor: { value: new THREE.Color() }, stars: { value: 0 },
+    },
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+type Uniforms = ReturnType<typeof domeMaterial>['uniforms'];
+
+const c = new THREE.Color();
+/** Paints the sky between themes `a` and `b` (t: 0 → a, 1 → b). */
+function paintSky(u: Uniforms, a: Theme, b: Theme, t: number) {
+  u.top.value.set(a.sky.top).lerp(c.set(b.sky.top), t);
+  u.horizon.value.set(a.sky.horizon).lerp(c.set(b.sky.horizon), t);
+  u.sunColor.value.set(a.sun.color).lerp(c.set(b.sun.color), t);
+  u.sunDir.value.copy(sunDir(a)).lerp(sunDir(b), t).normalize();
+  u.stars.value = lerp(a.stars, b.stars, t);
+  u.fogColor.value.copy(u.horizon.value);
+}
+
 export class Environment {
   /** 0 = day, 1 = night. Drives street lamps, lit windows and headlights. */
   night = 0;
   readonly sun = new THREE.DirectionalLight();
   private hemi = new THREE.HemisphereLight();
-  private dome: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
+  private dome: THREE.Mesh<THREE.SphereGeometry, ReturnType<typeof domeMaterial>>;
   private envs: Record<string, THREE.Texture> = {};
   private scene: THREE.Scene;
   private renderer: THREE.WebGLRenderer;
-  private world: World;
   private fog = new THREE.Fog(0xffffff, 60, 600);
-  private c = new THREE.Color();
 
-  constructor(scene: THREE.Scene, renderer: THREE.WebGLRenderer, world: World) {
+  constructor(scene: THREE.Scene, renderer: THREE.WebGLRenderer) {
     this.scene = scene;
     this.renderer = renderer;
-    this.world = world;
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    for (const [id, sky] of Object.entries(world.skies)) this.envs[id] = pmrem.fromEquirectangular(sky.texture).texture;
+    // each theme's reflections: its own sky, rendered once into an environment map
+    const pmrem = new THREE.PMREMGenerator(renderer), probe = new THREE.Scene(), ball = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), domeMaterial());
+    probe.add(ball);
+    for (const t of THEMES) {
+      paintSky(ball.material.uniforms, t, t, 0);
+      this.envs[t.id] = pmrem.fromScene(probe, 0, 0.1, 200).texture;
+    }
     pmrem.dispose();
 
-    this.dome = new THREE.Mesh(
-      new THREE.SphereGeometry(3000, 48, 24),
-      new THREE.ShaderMaterial({
-        ...domeShader,
-        uniforms: { skyA: { value: null }, skyB: { value: null }, blend: { value: 0 }, gainA: { value: 1 }, gainB: { value: 1 }, fogColor: { value: new THREE.Color() } },
-        side: THREE.BackSide,
-        depthWrite: false,
-        toneMapped: true,
-      }),
-    );
+    this.dome = new THREE.Mesh(new THREE.SphereGeometry(3000, 48, 24), domeMaterial());
     this.dome.renderOrder = -1;
     this.dome.frustumCulled = false;
 
@@ -83,40 +105,33 @@ export class Environment {
    * tunnel the view is: daylight gives way to the warm light of its lamps.
    */
   apply(a: Theme, b: Theme, t: number, camera: THREE.Camera, playerX: number, heading = 0, shade = 0) {
-    const skyA = this.world.skies[a.sky], skyB = this.world.skies[b.sky];
     const u = this.dome.material.uniforms;
-    u.skyA.value = skyA.texture;
-    u.skyB.value = skyB.texture;
-    u.blend.value = t;
-    u.gainA.value = a.skyGain;
-    u.gainB.value = b.skyGain;
+    paintSky(u, a, b, t);
     this.dome.position.copy(camera.position);
     this.dome.rotation.y = heading;
     this.scene.environmentRotation.y = heading;
 
-    this.scene.environment = this.envs[t < 0.5 ? a.sky : b.sky];
-    this.scene.environmentIntensity = lerp(a.envIntensity, b.envIntensity, t) * (1 - 0.8 * shade);
+    this.scene.environment = this.envs[(t < 0.5 ? a : b).id];
+    this.scene.environmentIntensity = 1 - 0.8 * shade;
     this.renderer.toneMappingExposure = lerp(a.exposure, b.exposure, t);
     this.night = lerp(a.night, b.night, t);
 
-    // fog takes the colour of the horizon in the sky photo, so the ground melts into the sky
-    this.fog.color.copy(skyA.horizon).multiplyScalar(a.skyGain).lerp(this.c.copy(skyB.horizon).multiplyScalar(b.skyGain), t);
-    u.fogColor.value.copy(this.fog.color);
-    this.fog.color.lerp(this.c.set(TUNNEL_GLOW).multiplyScalar(0.25), shade * 0.6);
+    // fog takes the colour of the horizon, so the ground melts into the sky
+    this.fog.color.copy(u.horizon.value).lerp(c.set(TUNNEL_GLOW).multiplyScalar(0.25), shade * 0.6);
     this.fog.near = lerp(a.fog.near, b.fog.near, t);
     this.fog.far = lerp(a.fog.far, b.fog.far, t);
 
-    // sun where the photo's sun is (kept a little above the horizon so shadows stay readable)
-    const dir = skyA.sunDir.clone().lerp(skyB.sunDir, t).normalize();
+    // light comes from the painted sun (kept a little above the horizon so shadows stay readable)
+    const dir = u.sunDir.value.clone();
     dir.y = Math.max(dir.y, 0.25);
     dir.normalize().applyAxisAngle(UP, heading);
     this.sun.intensity = lerp(a.sun.intensity, b.sun.intensity, t) * (1 - shade);
-    this.sun.color.set(a.sun.color).lerp(this.c.set(b.sun.color), t);
+    this.sun.color.copy(u.sunColor.value);
     this.sun.target.position.set(playerX, 0, -15);
     this.sun.position.copy(this.sun.target.position).addScaledVector(dir, 150);
 
     this.hemi.intensity = lerp(lerp(a.ambient, b.ambient, t), 0.5, shade);
-    this.hemi.color.copy(this.fog.color).multiplyScalar(1.5).lerp(this.c.set(TUNNEL_GLOW), shade);
-    this.hemi.groundColor.set(0x2a2a26);
+    this.hemi.color.copy(u.top.value).lerp(u.horizon.value, 0.6).lerp(c.set(TUNNEL_GLOW), shade);
+    this.hemi.groundColor.set(a.ground).lerp(c.set(b.ground), t).multiplyScalar(0.5);
   }
 }

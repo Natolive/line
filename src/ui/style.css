@@ -7,6 +7,7 @@
   --danger: #ff5a5f;
   --glass: rgb(15 18 24 / 0.48);
   --font: 'Chakra Petch', system-ui, sans-serif;
+  --display: 'Bungee', var(--font); /* arcade lettering for titles and big numbers */
   color-scheme: dark;
 }
 
@@ -161,7 +162,11 @@ h1 {
   line-height: 0.9;
   text-transform: uppercase;
   text-shadow: 6px 6px 0 var(--accent);
+  text-transform: uppercase;
 }
+#countdown[data-light="red"] { color: #ff4a4a; }
+#countdown[data-light="amber"] { color: #ffb21a; }
+#countdown[data-light="green"] { color: #4aff7a; }
 h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; letter-spacing: 0.06em; }
 .danger { color: var(--danger); }
 .tagline { font-size: 18px; color: var(--muted); margin-bottom: 24px !important; }
@@ -194,11 +199,15 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: clamp(120px, 30vw, 240px);
+  font-size: clamp(64px, 16vw, 180px);
   font-weight: 700;
   font-style: italic;
   text-shadow: 6px 6px 0 var(--accent);
+  text-transform: uppercase;
 }
+#countdown[data-light="red"] { color: #ff4a4a; }
+#countdown[data-light="amber"] { color: #ffb21a; }
+#countdown[data-light="green"] { color: #4aff7a; }
 .mp-form { display: grid; gap: 6px; width: min(340px, 90vw); text-align: left; margin: 10px 0; }
 .mp-form label { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-top: 8px; }
 .mp-form input {
@@ -253,8 +262,6 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
 
 /* loading */
 .loading { background: var(--ink); gap: 18px; }
-.load-track { width: min(320px, 70vw); height: 4px; border-radius: 2px; background: rgb(247 244 238 / 0.15); overflow: hidden; }
-#load-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
 
 /* garage: the 3D car orbits behind this card */
 .menu { justify-content: flex-end; padding-bottom: max(28px, env(safe-area-inset-bottom)); background: linear-gradient(rgb(15 18 24 / 0.35), rgb(15 18 24 / 0) 30%, rgb(15 18 24 / 0) 45%, rgb(15 18 24 / 0.85)); }
@@ -288,3 +295,7 @@ h2 { margin: 0; font-size: 44px; font-style: italic; text-transform: uppercase; 
   .cta, .popup { animation: none; }
   #zone.show { animation: none; opacity: 1; }
 }
+
+/* arcade lettering: titles, counters, zone names */
+h1, h2, .score, .gear, .kmh, .final, #countdown, #zone { font-family: var(--display); font-weight: 400; font-style: normal; }
+h1, #zone, #countdown { text-shadow: 3px 3px 0 var(--accent), 6px 6px 0 rgb(0 0 0 / 0.35); }
