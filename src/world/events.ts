@@ -1,18 +1,56 @@
 // What road events put on the road (rules/events.ts): cones, warning signs and the flashing arrow trailer of
 // roadworks, the boxes and tyres of a lost load and the lorry that shed them, two wrecked cars and a warning
-// triangle. Built in sections kept complete ahead of the car like the scenery; what you knock flying is gone.
+// triangle, the machines of a roadworks site. Built in sections kept complete ahead of the car like the scenery;
+// what you hit is knocked flying, tumbles, bounces and stays lying where it lands.
 import * as THREE from 'three';
-import { eventsIn, type EventKind, type Thing } from '../rules/events.ts';
+import { EVENTS } from '../core/config.ts';
+import { eventsIn, type EventKind, type Thing, type ThingKind } from '../rules/events.ts';
 import { block, cone, part, post, prop, turn } from './assets.ts';
 import { PieceFrame, Ring, type TrackView } from './track.ts';
-import type { Fleet } from './vehicles/fleet.ts';
+import { BEACON, type Fleet } from './vehicles/fleet.ts';
 import { setBlinker } from './vehicles/lights.ts';
 import { spawn, type Vehicle } from './vehicles/prefab.ts';
 
 const SECTION = 40, BEHIND = 140, AHEAD = 1340; // m, as the scenery
-const ORANGE = 0xff6a1a, WHITE = 0xf6f6f2, DARK = 0x24252c;
+const ORANGE = 0xff6a1a, WHITE = 0xf6f6f2, DARK = 0x24252c, SITE = 0xffc21a, GLASS = 0x1b2440, STEEL = 0xb8bcc8;
+const GRAVITY = 9.81; // m/s²
+/** How what was knocked flying comes to rest: tipped over (rad) and how high its base then sits (m). */
+const REST: Partial<Record<ThingKind, { tilt: number; y: number }>> = { cone: { tilt: Math.PI / 2, y: 0.22 }, sign: { tilt: Math.PI / 2, y: 0.1 }, triangle: { tilt: Math.PI / 2, y: 0.04 } };
 
 type Section = { group: THREE.Group; ids: string[]; vehicles: Vehicle[] };
+/** Something knocked flying: its velocity and spin in its section's frame (-z down the road). */
+type Flyer = { obj: THREE.Object3D; v: THREE.Vector3; spin: THREE.Vector3; rest: { tilt: number; y: number } };
+
+const wheelGeo = (r: number, w: number) => new THREE.CylinderGeometry(r, r, w, 16).rotateZ(Math.PI / 2);
+
+/** Excavator, ~6.5 m: tracks, a turning body with its cab, the boom and stick reaching forward, the bucket down. */
+function digger() {
+  return prop(
+    block(0.6, 0.8, 4, DARK, -1, 0, 0), block(0.6, 0.8, 4, DARK, 1, 0, 0),
+    block(2.4, 1.3, 2.8, SITE, 0, 0.8, 0.4), block(2.4, 0.8, 0.6, DARK, 0, 1, 1.9),
+    block(1, 1.6, 1.2, SITE, -0.6, 2.1, -0.4), block(1.02, 0.9, 1.1, GLASS, -0.6, 2.6, -0.42), block(0.25, 0.2, 0.25, BEACON.amber, -0.6, 3.7, -0.4),
+    turn(block(0.4, 3.2, 0.5, SITE, 0.5, 1.8, -0.8), -0.9), turn(block(0.3, 2.2, 0.35, SITE, 0.5, 3.79, -3.3), Math.PI + 0.3), block(0.9, 0.6, 0.7, DARK, 0.5, 1.1, -4.1),
+  );
+}
+
+/** Road roller, ~4.6 m: the big steel drum in front, a canopy over the seat. */
+function roller() {
+  const parts: THREE.Object3D[] = [part(wheelGeo(0.75, 2.1), STEEL, 0, 0.75, -1.5), block(2.2, 0.3, 1, SITE, 0, 1.45, -1.5), block(1.8, 1, 2.6, SITE, 0, 0.6, 0.8)];
+  for (const s of [-1, 1]) {
+    parts.push(part(wheelGeo(0.6, 0.4), DARK, s * 0.9, 0.6, 1.5));
+    for (const z of [0.1, 1.5]) parts.push(block(0.08, 1.4, 0.08, DARK, s * 0.75, 1.6, z));
+  }
+  parts.push(block(1.9, 0.1, 1.7, SITE, 0, 3, 0.8), block(0.6, 0.5, 0.6, DARK, 0, 1.6, 0.9), block(0.25, 0.2, 0.25, BEACON.amber, 0, 3.1, 0.8));
+  return prop(...parts);
+}
+
+/** Dump truck, ~7.5 m: a cab, an orange tipper heaped with gravel, three axles. */
+function dumper() {
+  const parts: THREE.Object3D[] = [block(1.2, 0.4, 7, DARK, 0, 0.55, 0.1), block(2.4, 2, 2, SITE, 0, 0.9, -2.6), block(2.2, 0.8, 0.06, GLASS, 0, 1.9, -3.62)];
+  parts.push(block(2.5, 1.3, 4.6, ORANGE, 0, 1, 1.1), cone(1.3, 0.9, 0x8a7a6a, 0, 2.3, 1.1, 7), block(0.25, 0.2, 0.25, BEACON.amber, 0, 2.9, -2.6));
+  for (const z of [-2.6, 1.3, 2.7]) for (const s of [-1, 1]) parts.push(part(wheelGeo(0.55, 0.45), DARK, s * 1.05, 0.55, z));
+  return prop(...parts);
+}
 
 /** A board `w`×`h` m facing +z (the drivers coming), drawn on a canvas by `draw`. */
 function board(w: number, h: number, draw: (g: CanvasRenderingContext2D, W: number, H: number) => void, glow?: THREE.Color) {
@@ -87,6 +125,7 @@ export class Events {
   private clock = 0;
   private boards: THREE.MeshStandardMaterial[] = []; // the arrow boards, flashing together
   private protos: Record<string, THREE.Object3D>;
+  private flyers: Flyer[] = [];
 
   constructor(track: TrackView, fleet: Fleet) {
     this.fleet = fleet;
@@ -101,6 +140,9 @@ export class Events {
       box: prop(block(1.1, 1.1, 1.1, 0xffa42a), block(1.12, 0.12, 1.12, DARK, 0, 0.2), block(1.12, 0.12, 1.12, DARK, 0, 0.8), block(0.12, 1.12, 1.12, DARK)),
       'arrow:left': arrowTrailer(true, glow, this.boards),
       'arrow:right': arrowTrailer(false, glow, this.boards),
+      digger: digger(),
+      roller: roller(),
+      dumper: dumper(),
     };
     this.ring = new Ring<Section>(SECTION, BEHIND, AHEAD, (d0) => {
       const s = this.fill(d0);
@@ -116,6 +158,7 @@ export class Events {
   /** A new race (a new map): everything stands again. */
   clear() {
     this.knocked.clear();
+    this.flyers = [];
     this.ring.clear();
   }
 
@@ -125,17 +168,60 @@ export class Events {
     const on = Math.floor(this.clock * 2.5) % 2 === 0;
     for (const m of this.boards) m.emissiveIntensity = on ? 1.6 : 0.05;
     for (const s of this.ring.pieces()) for (const v of s.vehicles) setBlinker(v, 0, on, true);
+    this.fly(dt);
+  }
+
+  /** Moves what was knocked flying: thrown, tumbling, bouncing, then sliding to rest on its side. */
+  private fly(dt: number) {
+    const F = EVENTS.fling;
+    this.flyers = this.flyers.filter((f) => {
+      const { obj, v, spin } = f;
+      if (!obj.parent?.parent) return false; // its section was dropped behind the car
+      v.y -= GRAVITY * dt;
+      obj.position.addScaledVector(v, dt);
+      obj.rotation.x += spin.x * dt;
+      obj.rotation.z += spin.z * dt;
+      if (obj.position.y > f.rest.y) return true;
+      obj.position.y = f.rest.y;
+      if (v.y < -2) {
+        v.y *= -F.bounce; // a bounce, losing most of its height
+        spin.multiplyScalar(0.6);
+        return true;
+      }
+      v.y = 0;
+      // on the ground: slides to a stop and settles, tipped over
+      const h = Math.hypot(v.x, v.z), slow = Math.max(0, h - F.rollDrag * dt);
+      v.x *= h ? slow / h : 0;
+      v.z *= h ? slow / h : 0;
+      const k = Math.min(1, dt * 8), wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a)); // the same pose, without the turns it made
+      obj.rotation.x = f.rest.tilt + wrap(obj.rotation.x - f.rest.tilt);
+      obj.rotation.z = wrap(obj.rotation.z);
+      obj.rotation.x += (f.rest.tilt - obj.rotation.x) * k;
+      obj.rotation.z += (0 - obj.rotation.z) * k;
+      return slow > 0.05 || Math.abs(f.rest.tilt - obj.rotation.x) > 0.01;
+    });
   }
 
   isKnocked(id: string) {
     return this.knocked.has(id);
   }
 
-  /** Thing `id` was hit and sent flying (the game shows the burst): it disappears. */
-  knock(id: string) {
+  /**
+   * Thing `id` (of `kind`, `mass` kg) was hit by a car at `speed` m/s and shoved sideways towards `side`
+   * (-1 left, 1 right): it is knocked flying down the road, the lighter the further, and stays where it lands.
+   */
+  knock(id: string, kind: ThingKind, mass: number, speed: number, side: number) {
     this.knocked.add(id);
-    const o = this.shown.get(id);
-    if (o) o.visible = false;
+    const obj = this.shown.get(id);
+    if (!obj) return;
+    const F = EVENTS.fling, k = Math.min(1, 20 / mass), r = () => Math.random() - 0.5;
+    obj.rotation.order = 'YXZ'; // its heading first, then the tumble about its own axes
+    this.flyers.push({
+      obj,
+      v: new THREE.Vector3(side * (1 + speed * 0.08) + r() * 2, (1 + Math.random() * F.lift) * Math.min(1, speed / 25) * k + 0.5, -speed * F.share * k),
+      spin: new THREE.Vector3(-(4 + Math.random() * F.spin), 0, r() * F.spin),
+      rest: REST[kind] ?? { tilt: 0, y: 0 },
+    });
   }
 
   /** Builds what stands in the section starting at road position `d0`. */

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CARRIAGEWAY_HALF, EVENTS, GUARDRAIL_X, IMPACT, LANE_WIDTH, LANES, ROADSIDE, SHOULDER, START, TRACK, TRAFFIC, WALL } from '../src/core/config.ts';
+import { CARRIAGEWAY_HALF, EVENTS, MIRROR, GUARDRAIL_X, IMPACT, LANE_WIDTH, LANES, ROADSIDE, SHOULDER, START, TRACK, TRAFFIC, WALL } from '../src/core/config.ts';
 import { gridSlot } from '../src/rules/grid.ts';
 import { blocksIn, eventsIn } from '../src/rules/events.ts';
 import { MAX_PLAYERS } from '../src/net/protocol.ts';
@@ -8,7 +8,7 @@ import { GARAGE } from '../src/data/cars/index.ts';
 import { THEMES, TRANSITION_LENGTH, ZONE_LENGTH } from '../src/data/themes.ts';
 import { rectsOverlap } from '../src/rules/collision.ts';
 import { crashSeverity, groundLift, shunt, startWreck, stepWreck } from '../src/rules/crash.ts';
-import { densityAt, multiplierFor, onShoulder } from '../src/rules/difficulty.ts';
+import { densityAt, mirrorWarning, multiplierFor, onShoulder } from '../src/rules/difficulty.ts';
 import { stepSpring } from '../src/rules/spring.ts';
 import { themeBlend, themeIndexAt } from '../src/rules/themes.ts';
 import { damageEffects, impact, joltDamage, massOf, railImpact, type Moving } from '../src/rules/impact.ts';
@@ -430,4 +430,35 @@ test('road events: the same for every player, never in the way of the start, a t
   // the cones line the closure: the open lanes beside it are free of them
   const open = LANES.filter((_, i) => !works.lanes.includes(i));
   for (const c of works.things.filter((t) => t.kind === 'cone')) for (const x of open) assert.ok(Math.abs(c.x - x) > LANE_WIDTH / 2 - 0.1);
+  // two closed lanes shut one after the other along the taper: the inner one stays open (no cone in it) until its block starts
+  for (const e of all.filter((e) => e.kind === 'works' && e.lanes.length === 2)) {
+    const [outer, inner] = blocksIn(e.from, e.from);
+    assert.equal(outer.from, e.from);
+    assert.equal(inner.from, e.from + EVENTS.taper / 2);
+    for (const c of e.things.filter((t) => t.kind === 'cone' && t.d < inner.from)) assert.ok(Math.abs(c.x - LANES[inner.lane]) > LANE_WIDTH / 2 - 0.3);
+  }
+  // site machines stand inside the closed lanes, past the taper, clear of the open lanes
+  for (const e of all.filter((e) => e.kind === 'works')) {
+    const machines = e.things.filter((t) => ['digger', 'roller', 'dumper'].includes(t.kind));
+    assert.ok(machines.length >= EVENTS.machines[0] && machines.length <= EVENTS.machines[1]);
+    for (const m of machines) {
+      assert.ok(e.lanes.some((l) => Math.abs(LANES[l] - m.x) < 0.01), 'in a closed lane');
+      assert.ok(m.d > e.from + EVENTS.taper && m.d + m.l / 2 < e.to, 'behind the cones, inside the site');
+      assert.ok(m.w / 2 + 0.3 < LANE_WIDTH / 2 + 0.2, 'not wider than its lane');
+    }
+  }
+});
+
+test('the mirror warns of a vehicle closing in behind in my path, the nearer the brighter, and of police on my tail', () => {
+  const me = { d: 1000, x: 0, speed: 30, w: 1.9, l: 4.5 };
+  const car = (behind: number, x: number, speed: number, police = false) => ({ d: me.d - 4.5 - behind, x, speed, w: 1.9, l: 4.5, police });
+  assert.deepEqual(mirrorWarning(me, []), { danger: 0, police: false });
+  const near = mirrorWarning(me, [car(5, 0, 40)]).danger, far = mirrorWarning(me, [car(30, 0, 40)]).danger;
+  assert.ok(near > far && far > 0, 'nearer is brighter');
+  assert.equal(mirrorWarning(me, [car(MIRROR.warnGap + 5, 0, 40)]).danger, 0, 'too far to matter');
+  assert.equal(mirrorWarning(me, [car(5, 3.6, 40)]).danger, 0, 'in the next lane: it will pass');
+  assert.equal(mirrorWarning(me, [car(5, 0, 25)]).danger, 0, 'slower than me: falling back');
+  assert.equal(mirrorWarning(me, [{ ...car(5, 0, 40), d: me.d + 20 }]).danger, 0, 'ahead is not in the mirror');
+  assert.ok(mirrorWarning(me, [car(100, 3.6, 50, true)]).police, 'a police car behind, any lane');
+  assert.ok(!mirrorWarning(me, [car(MIRROR.policeRange + 10, 0, 50, true)]).police);
 });

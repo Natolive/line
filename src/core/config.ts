@@ -47,13 +47,16 @@ export const TRAFFIC = {
   densityPerKm: 2,
   laneChangePerSec: 0.04, // spontaneous lane changes, per car
   blockedLaneChangePerSec: 0.6, // when stuck behind someone slower
-  laneChangeSpeed: 1.6, // lateral m/s
+  laneChangeSpeed: 1.6, // lateral m/s, on average: the move is an S, eased in and out
+  laneChangeLean: 3, // × the body roll of a lane change, so it reads at a glance (arcade)
   blinkerTime: 1.4,
   minGap: 7,
   headwaySec: 1.3,
   accel: 2.2,
   brake: 7,
   curveAccel: 3, // m/s²: drivers slow down for bends that would push them sideways harder than this
+  mergeAhead: 450, // m: from this far before a closed lane, its drivers work their way over to an open one
+  mergePerSec: 2, // tries per second to move over, then (vans and lorries too, into any open lane)
 };
 
 // Events on the road (rules/events.ts): roadworks, a lost load and accidents stand at fixed spots of the map;
@@ -78,15 +81,31 @@ export const EVENTS = {
     arrow: { w: 2.2, l: 3.2, mass: 1e9 }, // the flashing arrow trailer that opens roadworks
     wreck: { w: 1.9, l: 4.5, mass: 1e9 },
     truck: { w: 2.5, l: 9, mass: 1e9 }, // the lorry that lost its load, on the shoulder
+    digger: { w: 2.6, l: 6.5, mass: 1e9 }, // site machines parked in the closed lanes
+    roller: { w: 2.2, l: 4.6, mass: 1e9 },
+    dumper: { w: 2.5, l: 7.5, mass: 1e9 },
   },
+  machines: [1, 3] as [min: number, max: number], // site machines per roadworks
+  // what you knock flying: thrown ahead at this share of your speed, up at up to `lift` m/s, tumbling
+  fling: { share: 0.7, lift: 6, spin: 9, bounce: 0.3, rollDrag: 6 }, // share, m/s, rad/s, kept on a bounce, m/s² of slide
   // moving events: how often (s on average) the traffic sends one, and how they drive
   policeEverySec: 70,
   convoyEverySec: 100,
-  policeKmh: 185,
+  policeKmh: 185, // at least; and always this much faster than the fastest player:
+  policeOverKmh: 40,
   convoyKmh: 60,
+  convoyClearAhead: 2500, // m of road with both right lanes open that a wide load needs before it is sent
   escortGap: 28, // m between the wide load and each of its motorbike escorts
   yieldDistance: 150, // m: traffic ahead of a police car in its lane moves over
   announceAhead: 450, // m: the HUD warns of an event this far ahead
+  announceSec: 3.5, // s the warning stays on screen
+};
+
+// Rear-view mirror: its frame warns of what comes up behind.
+export const MIRROR = {
+  warnGap: 40, // m: a vehicle in my path behind, closing in, nearer than this lights the frame red (brighter the nearer)
+  minClosing: 1.5, // m/s it must be gaining on me to count
+  policeRange: 150, // m: a police car this close behind flashes the frame red and blue
 };
 
 export const NEAR_MISS = { gap: 1.0, minSpeed: 25, points: 250 };

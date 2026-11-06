@@ -8,7 +8,7 @@ export type Fleet = { players: Record<string, Prefab>; cars: Prefab[]; heavy: Pr
 
 // Flashing lights of the police car, the wide load and its escorts: shared, so they all flash together (setBeacons).
 const beacon = (color: number) => new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0, roughness: 0.3 });
-const BEACON = { red: beacon(0xff2030), blue: beacon(0x2a6bff), amber: beacon(0xffa01a) };
+export const BEACON = { red: beacon(0xff2030), blue: beacon(0x2a6bff), amber: beacon(0xffa01a) };
 
 /** Flashes every beacon at time `t` (s): police red and blue in turn, amber warning lights pulsing. */
 export function setBeacons(t: number) {
@@ -41,6 +41,7 @@ const paint = (color: number, o: THREE.MeshStandardMaterialParameters = {}) => {
   return mats.get(key)!;
 };
 const GLASS = new THREE.MeshStandardMaterial({ color: 0x1b2440, roughness: 0.1, metalness: 0.5 });
+const MIRROR = new THREE.MeshStandardMaterial({ color: 0xc8e4ff, roughness: 0.05, metalness: 0.9 }); // door mirror glass: reflects the sky
 const TYRE = 0x1c1c22, HUB = 0x3a3b44, RIM = 0xdadbe6, DARK = 0x24252c, CHROME = 0xc9ccd6, PLATE = 0xf4f4ee;
 
 /** A side profile (z, y points, front first) extruded `width` across, rounded at the edges. */
@@ -98,8 +99,12 @@ function trim(parts: THREE.Object3D[], W: number, L: number, low: number, grille
   for (const s of [-1, 1]) {
     parts.push(box(W - 0.06, 0.2, 0.14, DARK, 0, low + 0.1, s * (L / 2 + 0.06))); // bumper
     parts.push(box(0.52, 0.12, 0.03, PLATE, 0, low + 0.1, s * (L / 2 + 0.14))); // plate
-    parts.push(box(0.17, 0.11, 0.13, body, s * (W / 2 + 0.1), mirror[0] + 0.06, mirror[1])); // mirror
-    parts.push(box(0.12, 0.03, 0.05, DARK, s * (W / 2 + 0.03), mirror[0] + 0.02, mirror[1]));
+    // door mirror: a housing in the body colour on a short arm off the door, its glass facing the cars behind
+    const mx = s * (W / 2 + 0.16), my = mirror[0] + 0.12, mz = mirror[1];
+    parts.push(box(0.16, 0.04, 0.06, DARK, s * (W / 2 + 0.05), my - 0.04, mz + 0.02)); // arm
+    parts.push(box(0.22, 0.14, 0.1, body, mx, my, mz)); // housing
+    parts.push(box(0.03, 0.14, 0.1, DARK, mx + s * 0.11, my, mz)); // its rim, outboard
+    parts.push(box(0.18, 0.1, 0.02, MIRROR, mx, my, mz + 0.055)); // the glass
   }
   parts.push(box(W * 0.45, 0.16, 0.05, DARK, 0, grille, -L / 2 - 0.11));
   for (let k = -1; k <= 1; k++) parts.push(box(W * 0.45, 0.02, 0.06, CHROME, 0, grille + k * 0.05, -L / 2 - 0.11));

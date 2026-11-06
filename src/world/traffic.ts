@@ -5,7 +5,7 @@ import { CARRIAGEWAY_HALF, EVENTS, IMPACT, LANE_COUNT, LANE_WIDTH, LANES, NEAR_M
 import { addReport, present, track, type Track } from '../net/interp.ts';
 import type { TrafficCar } from '../net/protocol.ts';
 import { rectsOverlap, type Rect } from '../rules/collision.ts';
-import { densityAt, onShoulder } from '../rules/difficulty.ts';
+import { densityAt, onShoulder, type Seen } from '../rules/difficulty.ts';
 import { blocksIn } from '../rules/events.ts';
 import { massOf, type Moving } from '../rules/impact.ts';
 import { curvatureAt } from '../rules/track.ts';
@@ -39,6 +39,11 @@ type Car = {
   shaken: number; // s left braking with hazards on after being hit
   desired: number;
   blink: number; // seconds of signalling left before moving over
+  shift: number; // 0..1 through a lane change under way (-1: none)
+  fromX: number; // where that lane change started
+  vx: number; // m/s sideways (+ right), measured each frame: the nose follows it
+  latAccel: number; // m/s² sideways, smoothed: the body leans with it
+  wants: number; // lane it is waiting, stopped, to merge into out of a closure (-1: none): the car behind there lets it in
   heavy: boolean;
   braking: boolean;
   passed: boolean; // near miss already judged against the local player
@@ -60,7 +65,7 @@ export class Traffic {
   private models: Prefab[];
   private heavyFrom: number;
   private specialFrom: number; // models from here on are ROLES
-  private blocks: { lane: number; from: number; to: number }[] = []; // lanes closed by road events, around the pack
+  private blocks: { event: number; lane: number; from: number; to: number }[] = []; // lanes closed by road events, around the pack
   private sirens: Car[] = []; // police cars on the road
   private policeIn = 0; // s until the next police chase
   private convoyIn = 0; // s until the next wide load
@@ -105,7 +110,7 @@ export class Traffic {
     setBeacons(this.clock);
     if (!this.remote) {
       const ds0 = drivers.length ? drivers.map((p) => p.d) : [me.d];
-      this.blocks = blocksIn(Math.min(...ds0) - T.despawnBehind, Math.max(...ds0) - T.despawnAhead);
+      this.blocks = blocksIn(Math.min(...ds0) - T.despawnBehind, Math.max(...ds0) - T.despawnAhead + T.mergeAhead);
       this.sirens = this.cars.filter((c) => c.role === 'police');
     }
 
@@ -113,8 +118,12 @@ export class Traffic {
       const before = c.d - me.d;
       if (this.remote) this.mirror(c, dt);
       else if (!parked(c)) {
+        const x0 = c.x;
         this.drive(c, dt, drivers);
         c.d += c.speed * dt;
+        const vx = (c.x - x0) / dt;
+        c.latAccel += ((vx - c.vx) / dt - c.latAccel) * Math.min(1, dt * 8);
+        c.vx = vx;
       }
       const after = c.d - me.d;
       // near miss: the car crossed the player's position, close but not touching
@@ -123,8 +132,7 @@ export class Traffic {
         const gap = Math.abs(c.x - me.x) - (c.v.w + me.rect.w) / 2;
         if (gap > 0 && gap < NEAR_MISS.gap && me.speed > NEAR_MISS.minSpeed) nearMisses++;
       }
-      const lateral = LANES[c.target] - c.x;
-      if (!this.remote) c.yaw = c.target !== c.lane && c.blink <= 0 ? Math.sign(lateral) * Math.atan(T.laneChangeSpeed / Math.max(c.speed, 1)) : 0;
+      if (!this.remote) c.yaw = Math.atan2(c.vx, Math.max(c.speed, 3)); // the nose points where it is going
       this.track.place(c.v.mesh, c.d, c.x, c.yaw);
       spinWheels(c.v, c.speed * dt);
       setBlinker(c.v, c.target === c.lane ? 0 : c.target > c.lane ? 1 : -1, this.clock % 0.8 < 0.4, parked(c) || c.shaken > 0);
@@ -146,7 +154,7 @@ export class Traffic {
       this.add(Math.floor(Math.random() * this.heavyFrom), this.nextBreakdown[side], (side ? 1 : -1) * SHOULDER.x, 0, false);
       this.nextBreakdown[side] += nextGap(side);
     }
-    this.dispatch(dt, front, back);
+    this.dispatch(dt, front, back, Math.max(0, ...drivers.map((p) => p.speed)));
     const wanted = Math.min(70, densityAt(km) * (1 + (front - back) / 500));
     if (this.cars.filter((c) => !parked(c) && !c.role).length < wanted) {
       const speed = drivers.reduce((s, p) => s + p.speed, 0) / Math.max(1, drivers.length);
@@ -158,6 +166,11 @@ export class Traffic {
     return nearMisses;
   }
 
+  /** Every traffic car between road positions `d0` and `d1`, as the rear-view mirror sees it. */
+  seen(d0: number, d1: number): Seen[] {
+    return this.cars.filter((c) => c.d > d0 && c.d < d1).map((c) => ({ d: c.d, x: c.x, speed: c.speed, w: c.v.w, l: c.v.l, police: c.role === 'police' }));
+  }
+
   /** The traffic car `me` touches, if any. */
   hits(me: Driver) {
     return this.cars.find((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d)));
@@ -166,8 +179,7 @@ export class Traffic {
   /** Every traffic car `me` touches, as impacts see them (relative to `me`'s road position). Broken-down cars don't budge. */
   touching(me: Driver): { car: Car; moving: Moving }[] {
     return this.cars.filter((c) => Math.abs(c.d - me.d) < 20 && rectsOverlap({ ...me.rect, z: 0 }, this.rectOf(c, me.d))).map((c) => {
-      const lateral = c.target !== c.lane && c.blink <= 0 ? Math.sign(LANES[c.target] - c.x) * T.laneChangeSpeed : 0;
-      return { car: c, moving: { rect: this.rectOf(c, me.d), vx: lateral + c.knock, vz: -c.speed, mass: parked(c) ? 1e9 : massOf(c.v.w, c.v.l) } };
+      return { car: c, moving: { rect: this.rectOf(c, me.d), vx: c.vx, vz: -c.speed, mass: parked(c) ? 1e9 : massOf(c.v.w, c.v.l) } };
     });
   }
 
@@ -248,7 +260,7 @@ export class Traffic {
     c.braking = c.speed > want + 0.3;
     c.speed = c.braking ? Math.max(want, c.speed - T.brake * dt) : Math.min(want, c.speed + T.accel * dt);
     setBrakeLights(c.v, c.braking);
-    c.suspension.update(c.v.body, dt, (c.speed - before) / dt, 0, c.speed * dt);
+    c.suspension.update(c.v.body, dt, (c.speed - before) / dt, c.latAccel * T.laneChangeLean, c.speed * dt); // squats, dives, and leans out of its lane changes
     if (c.role === 'convoy' || c.role === 'moto') return; // the wide load and its escorts hold their line
 
     // knocked sideways: the shove dies out, then the driver steers back to the middle of the nearest lane
@@ -258,6 +270,7 @@ export class Traffic {
       c.knock -= Math.sign(c.knock) * Math.min(Math.abs(c.knock), 6 * dt);
       c.lane = c.target = LANES.reduce((best, lx, i) => (Math.abs(lx - c.x) < Math.abs(LANES[best] - c.x) ? i : best), 0);
       c.blink = 0;
+      c.shift = -1;
       return;
     }
     if (c.target === c.lane && Math.abs(LANES[c.lane] - c.x) > 0.01) {
@@ -276,28 +289,50 @@ export class Traffic {
     }
     // lane changes: signal first, then drift over
     if (c.target === c.lane) {
-      // stuck behind someone slower, or heading for something standing in the lane (roadworks, an accident)
-      const stuck = !!lead && ((lead.gap < 50 && lead.speed < c.desired - 2) || (lead.speed === 0 && lead.gap < 300));
-      const rate = c.role === 'police' ? (stuck ? 4 : 0) : stuck ? T.blockedLaneChangePerSec : T.laneChangePerSec;
+      // my lane closed ahead (roadworks, an accident, a lost load): head for the nearest open lane, a lane at a time
+      const closed = this.closureAhead(c);
+      // otherwise: stuck behind someone slower
+      const stuck = !!lead && lead.gap < 50 && lead.speed < c.desired - 2;
+      const rate = closed ? T.mergePerSec : c.role === 'police' ? (stuck ? 4 : 0) : stuck ? T.blockedLaneChangePerSec : T.laneChangePerSec;
+      if (!closed) c.wants = -1;
       if (Math.random() < dt * rate) {
         const dir = Math.random() < 0.5 ? -1 : 1;
-        for (const to of [c.lane + dir, c.lane - dir]) {
-          if (to < 0 || to >= LANE_COUNT || (c.heavy && to < 2)) continue;
-          if (!this.laneClear(to, c, drivers)) continue;
+        const open = closed && LANES.map((_, i) => i).filter((i) => !closed.has(i)).sort((a, b) => Math.abs(a - c.lane) - Math.abs(b - c.lane))[0];
+        for (const to of closed ? [c.lane + Math.sign((open as number) - c.lane)] : [c.lane + dir, c.lane - dir]) {
+          if (to < 0 || to >= LANE_COUNT || (c.heavy && to < 2 && !closed)) continue; // lorries keep right, unless the right is closed
+          if (!this.laneClear(to, c, drivers, !!closed)) {
+            if (closed && c.speed < 2) c.wants = to; // stopped at the closure: signal, so the queue beside lets me in
+            continue;
+          }
           c.target = to;
           c.blink = T.blinkerTime;
+          c.wants = -1;
           break;
         }
       }
     } else if (c.blink > 0) {
       c.blink -= dt;
     } else {
-      const dx = LANES[c.target] - c.x, step = T.laneChangeSpeed * dt;
-      if (Math.abs(dx) <= step) {
-        c.x = LANES[c.target];
+      // the move itself: an S across, eased in and out; the nose turns into it, then straightens
+      if (c.shift < 0) {
+        c.shift = 0;
+        c.fromX = c.x;
+      }
+      const span = LANES[c.target] - c.fromX;
+      c.shift = Math.min(1, c.shift + (dt * T.laneChangeSpeed) / Math.max(Math.abs(span), 0.5));
+      const s = c.shift;
+      c.x = c.fromX + span * s * s * (3 - 2 * s);
+      if (s >= 1) {
         c.lane = c.target;
-      } else c.x += Math.sign(dx) * step;
+        c.shift = -1;
+      }
     }
+  }
+
+  /** The lanes closed by the next road event ahead in `c`'s own lane, within `mergeAhead` m; null if its lane runs on. */
+  private closureAhead(c: Car) {
+    const mine = this.blocks.find((b) => b.lane === c.lane && b.to > c.d && b.from - c.d < T.mergeAhead);
+    return mine ? new Set(this.blocks.filter((b) => b.event === mine.event).map((b) => b.lane)) : null;
   }
 
   /** Nearest vehicle ahead that overlaps us sideways, players included. */
@@ -308,18 +343,34 @@ export class Traffic {
       const gap = d - c.d - (l + c.v.l) / 2;
       if (!best || gap < best.gap) best = { gap, speed };
     };
-    for (const o of this.cars) if (o !== c) consider(o.x, o.d, o.v.w, o.v.l, o.speed);
+    for (const o of this.cars) {
+      if (o === c) continue;
+      consider(o.x, o.d, o.v.w, o.v.l, o.speed);
+      // someone stopped beside, waiting to merge into my lane: I hold back behind it and let it in
+      // (only once it is wholly ahead of me: right alongside, I drive on and the next one lets it in)
+      const ahead = o.d - c.d;
+      if (o.wants === c.lane && o.speed < 2 && ahead > (o.v.l + c.v.l) / 2 + 1 && ahead < 40) consider(LANES[o.wants], o.d, o.v.w, o.v.l, 0);
+    }
     for (const p of drivers) consider(p.x, p.d, p.rect.w, p.rect.l, p.speed);
     for (const b of this.blocks) consider(LANES[b.lane], (b.from + b.to) / 2, LANE_WIDTH * 0.8, b.to - b.from, 0);
     return best as { gap: number; speed: number } | null;
   }
 
-  private laneClear(lane: number, c: Car, drivers: Driver[]) {
+  /**
+   * Whether `c` can move over into `lane`. `crossing`: on its way out of a closure, it may cross a lane that is
+   * closed too, as long as what closes it is still ahead of the car (it then moves on to the next lane).
+   */
+  private laneClear(lane: number, c: Car, drivers: Driver[], crossing = false) {
     const room = 12 + c.v.l + c.speed * 0.8;
+    // crossing: only if it can still stop short of what closes the lane; otherwise never into a lane closed ahead
+    const reach = crossing ? c.v.l / 2 + 3 + c.speed ** 2 / (2 * T.brake * 0.7) : T.mergeAhead;
     const occupies = (x: number) => Math.abs(x - LANES[lane]) < LANE_WIDTH * 0.85;
     if (drivers.some((p) => occupies(p.x) && Math.abs(p.d - c.d) < room)) return false;
-    if (this.blocks.some((b) => b.lane === lane && c.d + room > b.from && c.d - room < b.to)) return false;
-    return !this.cars.some((o) => o !== c && !parked(o) && (occupies(o.x) || o.target === lane) && Math.abs(o.d - c.d) < room);
+    if (this.blocks.some((b) => b.lane === lane && c.d + reach > b.from && c.d - room < b.to)) return false;
+    // zip merging: out of a closure, a car slips in front of one crawling in the queue beside it, given the space;
+    // that one then waits for it (it brakes for whatever is ahead in its lane)
+    const inWay = (o: Car) => Math.abs(o.d - c.d) < (crossing && o.speed < 3 ? (c.v.l + o.v.l) / 2 + 1 : room);
+    return !this.cars.some((o) => o !== c && !parked(o) && (occupies(o.x) || o.target === lane) && inWay(o));
   }
 
   private trySpawn(d: number, drivers: Driver[]) {
@@ -343,7 +394,7 @@ export class Traffic {
    * Now and then sends a police car up from behind the pack (fast lane, everyone moves over), or a wide load
    * ahead of it: a boat across the two right lanes at walking pace for a motorway, a motorbike before and after.
    */
-  private dispatch(dt: number, front: number, back: number) {
+  private dispatch(dt: number, front: number, back: number, fastest: number) {
     // it arrives where ordinary traffic does, out in the fog: whoever stands in its way there simply isn't spawned
     const makeRoom = (d: number, lanes: number[], span: number) => {
       if (this.blocks.some((b) => lanes.includes(b.lane) && d + span > b.from && d - span < b.to)) return false;
@@ -357,13 +408,16 @@ export class Traffic {
     if ((this.policeIn -= dt) <= 0 && back - T.spawnBehind > this.clearUntil) {
       const d = back - (T.spawnBehind + T.despawnBehind) / 2; // behind the pack, yet short of where traffic is dropped
       if (makeRoom(d, [0], 30)) {
-        this.add(this.specialFrom, d, LANES[0], kmh(EVENTS.policeKmh), false);
+        // always faster than whoever it is chasing: a police car that never catches up is never seen
+        this.add(this.specialFrom, d, LANES[0], Math.max(kmh(EVENTS.policeKmh), fastest + kmh(EVENTS.policeOverKmh)), false);
         this.policeIn = EVENTS.policeEverySec * (0.5 + Math.random());
       }
     }
     if ((this.convoyIn -= dt) <= 0 && front - T.spawnAhead > this.clearUntil) {
       const d = front - T.spawnAhead, speed = kmh(EVENTS.convoyKmh), g = EVENTS.escortGap;
-      if (makeRoom(d, [2, 3], g + 30)) {
+      // it never changes lanes: only sent onto a stretch where both right lanes stay open
+      const clear = !blocksIn(d - g, d + EVENTS.convoyClearAhead).some((b) => b.lane >= 2);
+      if (clear && makeRoom(d, [2, 3], g + 30)) {
         this.add(this.specialFrom + 2, d + g, LANES[3], speed, true);
         this.add(this.specialFrom + 1, d, (LANES[2] + LANES[3]) / 2, speed, true);
         this.add(this.specialFrom + 2, d - g, LANES[3], speed, true);
@@ -381,7 +435,7 @@ export class Traffic {
     const role = model >= this.specialFrom ? ROLES[model - this.specialFrom] : null;
     if (role === 'police') this.news.push('Police chase!');
     if (role === 'convoy') this.news.push('Wide load ahead');
-    const car: Car = { id, role, model, v, lane, target: lane, x, d, yaw: 0, knock: 0, shaken: 0, speed, desired: speed, blink: 0, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
+    const car: Car = { id, role, model, v, lane, target: lane, x, d, yaw: 0, knock: 0, shaken: 0, speed, desired: speed, blink: 0, shift: -1, fromX: x, vx: 0, latAccel: 0, wants: -1, heavy, braking: false, passed: false, suspension: new Suspension(), track: track() };
     this.cars.push(car);
     return car;
   }

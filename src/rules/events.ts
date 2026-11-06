@@ -12,6 +12,7 @@ export type Thing = { id: string; kind: ThingKind; d: number; x: number; yaw: nu
 export type RoadEvent = { id: number; kind: EventKind; from: number; to: number; lanes: number[]; things: Thing[] };
 
 const KINDS: EventKind[] = ['works', 'load', 'accident'];
+const MACHINES: ThingKind[] = ['digger', 'roller', 'dumper'];
 
 /** The event at candidate spot `k` (every `EVENTS.every` m), if there is one. */
 export function eventAt(k: number): RoadEvent | null {
@@ -33,6 +34,9 @@ export function eventAt(k: number): RoadEvent | null {
       put('cone', d, outer + (edge - outer) * k2);
     }
     put('arrow', from + E.taper + 6, LANES[lanes[0]]);
+    // the site itself: machines parked in the closed lanes, behind the cones
+    const [lo, hi] = E.machines, count = lo + Math.floor(r(7) * (hi - lo + 1)), start = from + E.taper + 30, gap = (to - start - 20) / count;
+    for (let i = 0; i < count; i++) put(MACHINES[Math.floor(r(8 + i) * MACHINES.length)], start + (i + 0.5) * gap, LANES[lanes[i % n]], (r(12 + i) - 0.5) * 0.3);
     for (const ahead of E.signsAhead) put('sign', from - ahead, side * SHOULDER.x);
   } else if (kind === 'load') {
     // a lorry stopped on the shoulder, its boxes and tyres spread over the lane beside it
@@ -69,7 +73,13 @@ export function eventsIn(d0: number, d1: number) {
   return out;
 }
 
-/** Each blocked lane between `d0` and `d1`, as a stopped obstacle traffic must queue behind or steer round. */
+/**
+ * Each blocked lane between `d0` and `d1`, as a stopped obstacle traffic must queue behind or steer round.
+ * Roadworks close their lanes one after the other along the cones' taper (outer lane first), so a driver
+ * in the outer lane can still cross the inner one to get out.
+ */
 export function blocksIn(d0: number, d1: number) {
-  return eventsIn(d0, d1).flatMap((e) => e.lanes.map((lane) => ({ lane, from: e.from, to: e.to })));
+  return eventsIn(d0, d1).flatMap((e) =>
+    e.lanes.map((lane, i) => ({ event: e.id, lane, from: e.kind === 'works' ? e.from + (E.taper * i) / e.lanes.length : e.from, to: e.to })),
+  );
 }

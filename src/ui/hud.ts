@@ -89,6 +89,13 @@ export class Hud {
     return { x: r.left + el.clientLeft, y: r.top + el.clientTop, w, h, radius };
   }
 
+  /** Lights the mirror's frame: red as something closes in behind (`danger` 0..1), red and blue for police on my tail. */
+  mirrorWarning(danger: number, police: boolean) {
+    const el = $('mirror');
+    el.style.setProperty('--danger', danger.toFixed(2));
+    el.toggleAttribute('data-police', police);
+  }
+
   setFps(fps: number) {
     $('fps').textContent = String(Math.round(fps));
   }
@@ -194,12 +201,14 @@ export class Hud {
   }
   private zoneTimer: ReturnType<typeof setTimeout> | undefined;
 
-  popup(text: string) {
+  /** A message over the road for `seconds` (a near miss flashes by; a warning stays long enough to read). */
+  popup(text: string, seconds = 1.2) {
     const el = document.createElement('div');
     el.className = 'popup';
     el.textContent = text;
+    el.style.animationDuration = `${seconds}s`;
     $('popups').append(el);
-    setTimeout(() => el.remove(), 1200);
+    setTimeout(() => el.remove(), seconds * 1000);
   }
 
   /** Garage card: the selected car and its measured performance. */

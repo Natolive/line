@@ -9,7 +9,7 @@ import { Input } from '../platform/input.ts';
 import { impact, massOf, type Hit } from '../rules/impact.ts';
 import { rectsOverlap } from '../rules/collision.ts';
 import { crashSeverity, shunt, type Wreck, type WreckEvents } from '../rules/crash.ts';
-import { multiplierFor } from '../rules/difficulty.ts';
+import { mirrorWarning, multiplierFor } from '../rules/difficulty.ts';
 import { blocksIn, eventsIn, type EventKind } from '../rules/events.ts';
 import { themeBlend, themeIndexAt } from '../rules/themes.ts';
 import { curvatureAt, setSeed, tunnelShade } from '../rules/track.ts';
@@ -33,7 +33,7 @@ import type { Fleet } from '../world/vehicles/fleet.ts';
 import { setNight } from '../world/vehicles/lights.ts';
 import { Battle } from './battle.ts';
 import type { Car } from '../data/cars/index.ts';
-import { CRASH, EVENTS, IMPACT, LANES, NEAR_MISS, START } from './config.ts';
+import { CRASH, EVENTS, IMPACT, LANES, MIRROR, NEAR_MISS, START } from './config.ts';
 
 type State = Screen | 'crash';
 const BEST_KEY = 'line-best', CAR_KEY = 'line-car', NAME_KEY = 'line-name';
@@ -150,6 +150,7 @@ export class Game {
       this.applyTheme();
       // rear-view mirror while driving (and on the start grid); the HUD draws its frame
       const glass = this.hud.mirror(['play', 'countdown', 'pause'].includes(this.state));
+      if (glass) this.warnMirror();
       this.stage.render(this.fx.shake, glass && { camera: this.player.mirror, rect: glass });
     });
   }
@@ -367,9 +368,10 @@ export class Game {
         const hit = impact(this.player.moving, { rect, vx: 0, vz: 0, mass: t.mass });
         if (!hit) continue;
         if (t.mass < 1e6) {
-          this.events.knock(t.id);
+          // knocked flying ahead and away from the car, with a few chips of it
+          this.events.knock(t.id, t.kind, t.mass, Math.abs(this.player.state.speed), Math.sign(t.x - this.player.state.x) || 1);
           const at = this.player.car.mesh.position.clone().setX(t.x).setY(0.5);
-          this.fx.burst(at, t.kind === 'box' ? [0xffa42a, 0x24252c] : t.kind === 'tyre' ? [0x1c1c22, 0x5a5a60] : [0xff6a1a, 0xf6f6f2], 8, 5);
+          this.fx.burst(at, t.kind === 'box' ? [0xffa42a, 0x24252c] : t.kind === 'tyre' ? [0x1c1c22, 0x5a5a60] : [0xff6a1a, 0xf6f6f2], 4, 3);
         } else this.player.state.x += hit.normal[0] * hit.depth;
         if (this.onKnock(hit, t.x)) return;
       }
@@ -516,7 +518,7 @@ export class Game {
     this.fx.update(dt, forward);
     this.smoke.update(dt, forward);
     const misses = this.traffic.update(dt, this.me, b?.rivals.drivers() ?? [], this.dist / 1000);
-    for (let i = 0; i < misses; i++) {
+    for (let i = 0; i < misses && mult > 0; i++) { // none on the hard shoulder, where nothing scores
       const pts = NEAR_MISS.points * mult;
       this.score += pts;
       this.nearMisses++;
@@ -556,14 +558,22 @@ export class Game {
     if (this.state === 'play') this.knocks();
   }
 
+  /** The mirror's frame lights up for what comes up behind me: traffic, rivals, the police. */
+  private warnMirror() {
+    const p = this.player.state, me = { d: this.dist, x: p.x, speed: p.speed, w: this.player.car.w, l: this.player.car.l };
+    const rivals = (this.battle?.rivals.drivers() ?? []).map((r) => ({ d: r.d, x: r.x, speed: r.speed, w: r.rect.w, l: r.rect.l }));
+    const w = this.state === 'play' ? mirrorWarning(me, [...this.traffic.seen(this.dist - MIRROR.policeRange - 20, this.dist), ...rivals]) : { danger: 0, police: false };
+    this.hud.mirrorWarning(w.danger, w.police);
+  }
+
   /** Warns of what's coming: road events ahead, and whatever the traffic sends (a police chase, a wide load). */
   private announce() {
     for (const e of eventsIn(this.dist, this.dist + EVENTS.announceAhead)) {
       if (e.from < this.dist || e.from - this.dist > EVENTS.announceAhead || this.announced.has(e.id)) continue;
       this.announced.add(e.id);
-      this.hud.popup(NEWS[e.kind]);
+      this.hud.popup(NEWS[e.kind], EVENTS.announceSec);
     }
-    for (const news of this.traffic.news.splice(0)) this.hud.popup(news);
+    for (const news of this.traffic.news.splice(0)) this.hud.popup(news, EVENTS.announceSec);
   }
 
   private battleStats() {

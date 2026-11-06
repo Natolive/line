@@ -12,6 +12,9 @@ const MAT = {
   // headlight halo: invisible by day, fades in with the night (see setNight)
   head: new THREE.SpriteMaterial({ map: softDot, color: 0xfff1d6, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0 }),
   blink: new THREE.MeshStandardMaterial({ color: 0xffa000, emissive: 0xffa000, emissiveIntensity: 5 }),
+  // indicator lens, always there (dull amber), and the halo it throws when it flashes
+  lens: new THREE.MeshStandardMaterial({ color: 0xd07a10, emissive: 0xff8a00, emissiveIntensity: 0.15, roughness: 0.3 }),
+  blinkGlow: new THREE.SpriteMaterial({ map: softDot, color: 0xffa020, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 }),
 };
 const lightGeo = new THREE.BoxGeometry(1, 1, 1);
 
@@ -114,7 +117,26 @@ export function fitLights(body: THREE.Group, l: number, h: number, y: number, lx
     if (!lamps.length) light(body, 'tail', MAT.tail, [0.32, 0.09, 0.04], [side * lx, y, l / 2 + 0.02], true);
     light(body, 'glow', MAT.glow, [1.1, 0.7, 1], [side * glowX, glowY, glowZ + 0.1]);
     light(body, 'head', MAT.head, [1.3, 0.9, 1], [side * lx, y * 0.9, -l / 2 - 0.15], true);
-    for (const z of [-l / 2 - 0.02, l / 2 + 0.02]) light(body, side < 0 ? 'blinkL' : 'blinkR', MAT.blink, [0.12, 0.08, 0.04], [side * (lx + 0.18), y, z]);
+    // indicators: an amber lens under each tail lamp and each headlamp (same height and spread), and a repeater
+    // on each flank; the flash lights the lens up and throws a halo
+    const role = side < 0 ? 'blinkL' : 'blinkR', span = lamps.length ? lampBox.getSize(new THREE.Vector3()).x / 2 : lx + 0.2;
+    const x = side * (span - 0.12), iy = glowY - 0.13;
+    for (const end of [-1, 1]) {
+      const z = end * (glowZ + 0.05); // proud of the body's rounded edge, which reaches past the lamps
+      const lens = new THREE.Mesh(lightGeo, MAT.lens);
+      lens.scale.set(0.2, 0.07, 0.04);
+      lens.position.set(x, iy, z);
+      body.add(lens);
+      light(body, role, MAT.blink, [0.22, 0.08, 0.05], [x, iy, z]);
+      light(body, role, MAT.blinkGlow, [1.2, 0.8, 1], [x, iy, z + end * 0.15]);
+    }
+    const flank = side * (lx + 0.43), fz = -l / 2 + 0.95;
+    const repeater = new THREE.Mesh(lightGeo, MAT.lens);
+    repeater.scale.set(0.03, 0.06, 0.18);
+    repeater.position.set(flank, glowY, fz);
+    body.add(repeater);
+    light(body, role, MAT.blink, [0.04, 0.07, 0.2], [flank, glowY, fz]);
+    light(body, role, MAT.blinkGlow, [0.5, 0.35, 1], [flank + side * 0.1, glowY, fz]);
   }
 }
 

@@ -16,13 +16,12 @@ export class Stage {
   private look = new THREE.Vector3();
   private want = new THREE.Vector3();
   // rear-view mirror: rendered into a texture, then drawn flipped (as a mirror is) into the glass
-  private mirrorRT = new THREE.WebGLRenderTarget(1, 1);
+  private mirrorRT = new THREE.WebGLRenderTarget(1, 1, { samples: 4 }); // antialiased, like the main view
   private overlay = new THREE.Scene();
   private overlayCam = new THREE.OrthographicCamera(0, 1, 0, -1, -1, 1); // CSS pixels, y down
   private glass: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private mask = document.createElement('canvas'); // rounded corners of the glass, as an alpha map
   private maskKey = '';
-  private mirrorFrame = 0;
 
   constructor(root: HTMLElement) {
     const r = this.renderer;
@@ -102,21 +101,20 @@ export class Stage {
     p.y -= jy;
     if (!mirror || mirror.rect.w < 1) return;
 
-    // ponytail: a second full scene render; at 1× resolution and every other frame it costs ~half. Cull scenery by distance if it still bites.
-    const { camera, rect } = mirror, pr = 1;
+    // ponytail: a second full scene render, every frame at the screen's resolution (sharp and smooth). If fps suffers,
+    // render it every other frame again, or cull what lies past the fog behind.
+    const { camera, rect } = mirror, pr = r.getPixelRatio();
     const tw = Math.round(rect.w * pr), th = Math.round(rect.h * pr);
     if (this.mirrorRT.width !== tw || this.mirrorRT.height !== th) this.mirrorRT.setSize(tw, th);
     if (camera.aspect !== rect.w / rect.h) {
       camera.aspect = rect.w / rect.h;
       camera.updateProjectionMatrix();
     }
-    if (this.mirrorFrame++ % 2 === 0) {
-      r.shadowMap.autoUpdate = false; // the main view just drew the shadows
-      r.setRenderTarget(this.mirrorRT);
-      r.render(this.scene, camera);
-      r.setRenderTarget(null);
-      r.shadowMap.autoUpdate = true;
-    }
+    r.shadowMap.autoUpdate = false; // the main view just drew the shadows
+    r.setRenderTarget(this.mirrorRT);
+    r.render(this.scene, camera);
+    r.setRenderTarget(null);
+    r.shadowMap.autoUpdate = true;
     const key = `${tw}x${th}r${rect.radius}`;
     if (key !== this.maskKey) {
       this.maskKey = key;
